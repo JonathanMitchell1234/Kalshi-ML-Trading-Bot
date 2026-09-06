@@ -1,0 +1,44 @@
+{
+ "n": 7608,
+ "base_rate_test": 0.4991,
+ "test_start": "2026-07-14 22:15:00+00:00",
+ "lgbm": {
+  "acc": 0.5254,
+  "logloss": 0.6967,
+  "brier": 0.2506,
+  "auc": 0.5367
+ },
+ "gru": {
+  "acc": 0.4956,
+  "logloss": 0.6948,
+  "brier": 0.2508,
+  "auc": 0.4969
+ },
+ "stack": {
+  "acc": 0.5254,
+  "logloss": 0.7727,
+  "brier": 0.2797,
+  "auc": 0.5352
+ },
+ "coef": {
+  "p_lgbm": 12.5284,
+  "p_gru": 0.4154,
+  "intercept": -6.708
+ },
+ "lgbm_conf10": {
+  "traded_frac": 0.0963,
+  "hit_rate": 0.5818
+ },
+ "gru_conf10": {
+  "traded_frac": 0.0,
+  "hit_rate": null
+ },
+ "stack_conf10": {
+  "traded_frac": 0.5018,
+  "hit_rate": 0.5061
+ },
+ "production": {
+  "signal": "p_stack = isotonic-calibrated LightGBM (dir_iso)",
+  "reason": "GRU test AUC 0.497 with zero high-conviction outputs; logistic stack tails worse than LGBM alone (stack conf10 hit 50.6% vs LGBM 58.2%, logloss 0.77 vs 0.70). Blender added variance, no signal."
+ }
+}

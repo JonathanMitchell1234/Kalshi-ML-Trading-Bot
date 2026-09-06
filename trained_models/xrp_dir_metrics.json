@@ -1,0 +1,62 @@
+{
+ "base_rate_test": 0.4727,
+ "calibration": "isotonic",
+ "logloss_test": 0.7072,
+ "test": {
+  "n": 933,
+  "acc": 0.5391,
+  "logloss": 0.7072,
+  "brier": 0.2558,
+  "auc": 0.5253
+ },
+ "deciles_test": [
+  {
+   "decile": 2,
+   "n": 163,
+   "mean_p": 0.2596,
+   "hit_rate": 0.4479
+  },
+  {
+   "decile": 4,
+   "n": 147,
+   "mean_p": 0.4092,
+   "hit_rate": 0.449
+  },
+  {
+   "decile": 5,
+   "n": 148,
+   "mean_p": 0.4553,
+   "hit_rate": 0.473
+  },
+  {
+   "decile": 10,
+   "n": 475,
+   "mean_p": 0.5095,
+   "hit_rate": 0.4884
+  }
+ ],
+ "conf_test": {
+  "0.05": {
+   "conf": 0.05,
+   "traded_frac": 0.4051,
+   "n": 378,
+   "longs": 69,
+   "hit_rate": 0.5556
+  },
+  "0.1": {
+   "conf": 0.1,
+   "traded_frac": 0.1747,
+   "n": 163,
+   "longs": 1,
+   "hit_rate": 0.5521
+  },
+  "0.15": {
+   "conf": 0.15,
+   "traded_frac": 0.1715,
+   "n": 160,
+   "longs": 1,
+   "hit_rate": 0.5437
+  }
+ },
+ "test_start": "2026-08-27 15:30:00+00:00"
+}

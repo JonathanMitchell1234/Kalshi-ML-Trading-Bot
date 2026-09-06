@@ -1,0 +1,21 @@
+{
+ "seq": 60,
+ "feats": [
+  "btc_ret",
+  "btc_abs",
+  "btc_volr",
+  "btc_rng",
+  "eth_ret",
+  "sol_ret",
+  "xrp_ret",
+  "min_sin",
+  "min_cos"
+ ],
+ "stds": {
+  "BTC": 0.0005765889177830375,
+  "ETH": 0.0007804883250104753,
+  "SOL": 0.0008770553868324118,
+  "XRP": 0.0007460185658791702
+ },
+ "hidden": 32
+}

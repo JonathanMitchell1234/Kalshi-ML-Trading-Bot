@@ -1,0 +1,50 @@
+{
+ "NYC": {
+  "city": "NYC",
+  "n_test": 424,
+  "booster": "xgboost",
+  "rmse": 6.318,
+  "mae": 4.915,
+  "bias_test": 0.095,
+  "brier_bayes": 0.0455,
+  "brier_gauss": 0.0456,
+  "brier_clim": 0.25,
+  "winner": "bayes-t",
+  "bayes_params": {
+   "bias": -0.24157505789719064,
+   "sigma": 7.484397092386013,
+   "nu": 180.0,
+   "scale": 7.505509679016293,
+   "n": 176
+  },
+  "gauss_params": {
+   "bias": -0.24294764345342468,
+   "sigma": 7.562939423928418
+  },
+  "test_start": "2025-07-01"
+ },
+ "CHI": {
+  "city": "CHI",
+  "n_test": 427,
+  "booster": "xgboost",
+  "rmse": 7.21,
+  "mae": 5.65,
+  "bias_test": -0.211,
+  "brier_bayes": 0.0556,
+  "brier_gauss": 0.0557,
+  "brier_clim": 0.25,
+  "winner": "bayes-t",
+  "bayes_params": {
+   "bias": -1.0797412599836078,
+   "sigma": 7.885132694716173,
+   "nu": 185.0,
+   "scale": 7.906765472526091,
+   "n": 181
+  },
+  "gauss_params": {
+   "bias": -1.0857066813094842,
+   "sigma": 7.965832241121181
+  },
+  "test_start": "2025-07-01"
+ }
+}

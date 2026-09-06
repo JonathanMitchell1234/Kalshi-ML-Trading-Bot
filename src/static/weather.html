@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BitBot — Weather (Kalshi daily highs)</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --txt:#e6edf3; --dim:#8b949e;
+          --green:#3fb950; --red:#f85149; --blue:#58a6ff; }
+  * { box-sizing:border-box; font-family:-apple-system,system-ui,sans-serif; }
+  body { background:var(--bg); color:var(--txt); margin:0; padding:20px; max-width:1100px; margin-inline:auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .card .k { font-size:11px; text-transform:uppercase; color:var(--dim); letter-spacing:.5px; }
+  .card .v { font-size:22px; font-weight:650; margin-top:4px; }
+  .card .s { font-size:12px; color:var(--dim); margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; }
+  th:first-child,td:first-child { text-align:left; }
+  th { color:var(--dim); font-weight:500; font-size:12px; }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  button { background:#238636; color:#fff; border:0; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:12px; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.ghost { background:transparent; border:1px solid var(--line); }
+  input { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:5px 8px; width:80px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .note { font-size:12px; color:var(--dim); line-height:1.5; }
+  h2 { font-size:16px; margin:22px 0 8px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:11px; }
+  .pill.buy { background:#3fb95033; color:var(--green); } .pill.skip { background:#1f6feb33; color:var(--blue); }
+  .pill.error { background:#f8514933; color:var(--red); }
+  nav a { color:var(--blue); font-size:13px; text-decoration:none; margin-right:14px; }
+  #err { color:var(--red); font-size:13px; min-height:18px; }
+</style>
+</head>
+<body>
+<nav><a href="/">← Crypto</a><b>Weather</b></nav>
+<h1>Weather <span style="color:var(--dim);font-weight:400">Kalshi daily highs · paper only</span></h1>
+<div class="sub">LightGBM T_max + Bayesian Student-t calibration → $1-bracket probabilities · settles on The Weather Company</div>
+<div id="err"></div>
+<div id="cities">Loading…</div>
+
+<h2>Auto paper-trader <span class="sub">4×/day on GFS cycles (00/06/12/18Z)</span></h2>
+<div class="card">
+  <div class="row">
+    <label>Min edge <input id="wxThresh" type="number" value="0.03" step="0.01" min="0" max="0.5"></label>
+    <label>Max contracts (Kelly cap) <input id="wxContracts" type="number" value="1" min="1" max="100"></label>
+    <button id="wxStart" onclick="wxStart()">Start</button>
+    <button class="ghost" onclick="wxStop()">Stop</button>
+    <button class="ghost" onclick="wxCycle()">Run one cycle now</button>
+    <span id="wxStatus" class="note"></span>
+  </div>
+  <div class="note">Per city × (today + tomorrow): best fee-aware YES edge ≥ min, 1 position per event.
+  Intraday predictions condition on observed max-so-far. Backtests: NYC 28% / CHI 12% argmax over 60 events — thin edge, paper-sized.</div>
+</div>
+
+<h2>Trader log</h2>
+<div class="card"><table id="cycles"><thead><tr>
+  <th>Time</th><th>City</th><th>Event</th><th>Action</th><th>Detail</th>
+</tr></thead><tbody></tbody></table></div>
+
+<p class="note" style="margin-top:18px">Method: GBM point forecast from prior-day obs + climatology (no NWP input in v1 —
+GFS shown/logged for future blending) × Normal-Gamma posterior over trailing-90d residuals,
+recalibrated every prediction (see σ adapt: calm ≈ 4–5°F, volatile ≈ 8°F). Edge net of Kalshi
+taker fee. Basis risk: trained on ERA5, settled on TWC — bias-corrected, residual reported.
+Bracket gaps (unlisted degrees) are dead outcomes; fairs use raw density mass.</p>
+
+<script>
+const $ = id => document.getElementById(id);
+async function jget(u){ const r = await fetch(u); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function loadWx(){
+  try {
+    const o = await jget('/api/wx/overview');
+    $('cities').innerHTML = Object.values(o).map(c => {
+      const ds = Object.entries(c.dates).map(([date, d]) => {
+        if(d.error) return `<div class="card"><div class="k">${c.city} · ${date}</div><div class="s">${d.error}</div></div>`;
+        const p = d.pred;
+        const rows = d.brackets.map(b => {
+          const e = b.edge, hot = e != null && e >= 0.03;
+          const lbl = b.strike_type==='less' ? `≤${b.cap}` : b.strike_type==='greater' ? `≥${b.floor}` : `${b.floor}–${b.cap}`;
+          return `<tr style="${hot?'background:#3fb95022':''}"><td>${lbl}${hot?' ◀':''}</td>
+            <td>${b.yes_bid ?? '—'}</td><td>${b.yes_ask ?? '—'}</td><td>${b.fair.toFixed(3)}</td>
+            <td class="${e==null?'':(e>=0.03?'pos':'neg')}">${e?.toFixed(3) ?? '—'}</td>
+            <td>${b.yes_ask!=null ? `<button onclick="buy('${b.ticker}')">Buy</button>` : ''}</td></tr>`;
+        }).join('');
+        return `<h2>${c.city} · ${date} <span class="sub">${d.event}</span></h2>
+        <div class="grid">
+          <div class="card"><div class="k">Model high</div><div class="v">${p.pred}°F</div><div class="s">80% interval ${p.lo80}–${p.hi80}</div></div>
+          <div class="card"><div class="k">GFS / ensemble</div><div class="v">${p.gfs_max ?? '—'}°F</div><div class="s">ens ${p.ens_mean ?? '—'} ± ${p.ens_std ?? '—'}</div></div>
+          <div class="card"><div class="k">Calibration σ</div><div class="v">${p.sigma}°F</div><div class="s">bias ${p.bias} · obs-so-far ${p.obs_max_so_far ?? '—'}</div></div>
+          <div class="card"><div class="k">850hPa (12Z snd)</div><div class="v">${p.t850s == null ? '—' : (p.t850s*9/5+32).toFixed(1)+'°F'}</div><div class="s">24h chg ${p.t850s_chg24 == null ? '—' : (p.t850s_chg24*9/5).toFixed(1)+'°F'}</div></div>
+        </div>
+        <div class="card"><table><thead><tr><th>Bracket °F</th><th>Bid ¢</th><th>Ask ¢</th><th>Fair</th><th>Edge</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }).join('');
+      return ds;
+    }).join('');
+  } catch(e){ $('err').textContent = 'weather: ' + e.message; }
+}
+
+async function buy(ticker){
+  if(!confirm(`Paper-buy 1 YES @ ask on ${ticker}?`)) return;
+  const r = await fetch('/api/paper_trade',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({market_ticker:ticker, side:'yes', contracts:1})});
+  if(!r.ok){ alert('rejected: ' + await r.text()); return; }
+  loadAuto();
+}
+
+async function loadAuto(){
+  const s = await jget('/api/wx/auto');
+  $('wxThresh').value = s.config.threshold; $('wxContracts').value = s.config.contracts;
+  $('wxStatus').textContent = s.thread_running ? `RUNNING · next in ${s.next_in_s ?? '?'}s` : 'stopped';
+  $('wxStart').disabled = s.thread_running;
+  document.querySelector('#cycles tbody').innerHTML = (s.cycles||[]).map(r =>
+    `<tr><td style="white-space:nowrap">${(r.ts||'').slice(5,16)}</td><td>${r.city||''}</td>
+     <td style="font-size:12px">${r.event_ticker||''}</td>
+     <td><span class="pill ${r.action}">${r.action}</span></td>
+     <td style="text-align:left;font-size:12px">${r.detail||''}</td></tr>`).join('')
+    || '<tr><td colspan="5">No cycles yet</td></tr>';
+}
+async function wxStart(){
+  const r = await fetch('/api/wx/auto/start',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({threshold:+$('wxThresh').value, contracts:+$('wxContracts').value})});
+  if(!r.ok){ alert('start failed: ' + await r.text()); return; }
+  loadAuto();
+}
+async function wxStop(){ await fetch('/api/wx/auto/stop',{method:'POST'}); loadAuto(); }
+async function wxCycle(){ await fetch('/api/wx/auto/cycle',{method:'POST'}); loadAuto(); }
+
+loadWx(); loadAuto();
+setInterval(() => { loadWx(); loadAuto(); }, 60000);
+</script>
+</body>
+</html>
