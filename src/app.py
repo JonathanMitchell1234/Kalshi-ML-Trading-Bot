@@ -21,6 +21,8 @@ import auto_trader as A
 import wx_trader as W
 from economics import net_edge, all_in_ask_cents
 
+_STARTED = time.monotonic()
+
 app = FastAPI(title="BitBot Dashboard")
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -205,6 +207,37 @@ def _run_backtest_bg(n_events: int, lead_min: int):
         _backtest_job.update(state="error", error=str(e))
 
 
+class Backtest15Req(BaseModel):
+    n_events: int = 200
+    asset: str = "BTC"
+
+
+def _run_backtest15_bg(n_events: int, asset: str):
+    _backtest_job.update(state="running", done=0, total=n_events)
+    try:
+        from backtest_15m import run_backtest_15m
+        res = run_backtest_15m(n_events=n_events,
+                               progress=lambda a, b: _backtest_job.update(done=a, total=b),
+                               asset=asset)
+        _backtest_job.update(state="done", result=res)
+    except Exception as e:
+        _backtest_job.update(state="error", error=str(e))
+
+
+@app.post("/api/backtest15")
+def api_backtest15(req: Backtest15Req):
+    if _backtest_job.get("state") == "running":
+        raise HTTPException(409, "backtest already running")
+    if req.asset not in ("BTC", "ETH"):
+        raise HTTPException(400, "asset BTC|ETH")
+    if not 1 <= req.n_events <= 400:
+        raise HTTPException(400, "n_events 1..400")
+    th = threading.Thread(target=_run_backtest15_bg,
+                          args=(req.n_events, req.asset), daemon=True)
+    th.start()
+    return {"started": True, "asset": req.asset}
+
+
 @app.post("/api/backtest")
 def api_backtest(req: BacktestReq):
     if _backtest_job.get("state") == "running":
@@ -280,7 +313,64 @@ def api_eval():
     return E.summary()
 
 
+@app.get("/api/health")
+def api_health():
+    """Single status snapshot for the UI shell: freshness, regime, versions."""
+    import time as _t
+    from datetime import datetime, timezone
+    out: dict = {"server_time_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 "kalshi_ok": None, "vol": None, "data_age_min": {},
+                 "versions": {}, "traders": {}}
+    try:
+        K.get_market("KXBTC15M-26SEP042115-15")
+        out["kalshi_ok"] = True
+    except Exception:
+        try:
+            K.get_event("KXBTC-26SEP0421")
+            out["kalshi_ok"] = True
+        except Exception:
+            out["kalshi_ok"] = False
+    try:
+        from fetch_data import load_or_fetch
+        import pandas as _pd
+        b = load_or_fetch("BTC", "1m", days=8)
+        b["r"] = b["close"].pct_change()
+        now = b["time"].max()
+        v24 = float(b[b["time"] > now - _pd.Timedelta(hours=24)]["r"].rolling(15).std().mean() * 1e4)
+        v7d = float(b["r"].rolling(15).std().mean() * 1e4)
+        out["vol"] = {"bps_24h": round(v24, 1), "bps_7d": round(v7d, 1),
+                      "label": "dead calm" if v24 < 2 else ("thin" if v24 < 3 else
+                               ("normal" if v24 < 6 else "volatile")),
+                      "asof": str(now)}
+        out["data_age_min"] = {"btc_1m": round((datetime.now(timezone.utc) - now).total_seconds() / 60, 1)}
+    except Exception as e:
+        out["vol"] = {"error": str(e)[:100]}
+    try:
+        out["versions"] = __import__("json").loads((S.MODEL_DIR / "versions.json").read_text())
+    except Exception:
+        pass
+    for name, mod in (("crypto", A), ("wx", W)):
+        try:
+            s = mod.status()
+            out["traders"][name] = {"running": s["thread_running"], "next_in_s": s["next_in_s"],
+                                    "last": s["last"]}
+        except Exception as e:
+            out["traders"][name] = {"running": False, "error": str(e)[:100]}
+    out["uptime_s"] = int(_t.monotonic() - _STARTED)
+    return out
+
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.on_event("startup")
+def _warm():
+    def _run():
+        try:
+            overview()
+        except Exception as e:
+            print(f"warmup failed: {e}", flush=True)
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ------------------------------------------------------- weather tab

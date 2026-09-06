@@ -3,134 +3,204 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BitBot — Weather (Kalshi daily highs)</title>
-<style>
-  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --txt:#e6edf3; --dim:#8b949e;
-          --green:#3fb950; --red:#f85149; --blue:#58a6ff; }
-  * { box-sizing:border-box; font-family:-apple-system,system-ui,sans-serif; }
-  body { background:var(--bg); color:var(--txt); margin:0; padding:20px; max-width:1100px; margin-inline:auto; }
-  h1 { font-size:22px; margin:0 0 4px; }
-  .sub { color:var(--dim); font-size:13px; margin-bottom:16px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
-  .card .k { font-size:11px; text-transform:uppercase; color:var(--dim); letter-spacing:.5px; }
-  .card .v { font-size:22px; font-weight:650; margin-top:4px; }
-  .card .s { font-size:12px; color:var(--dim); margin-top:2px; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; }
-  th:first-child,td:first-child { text-align:left; }
-  th { color:var(--dim); font-weight:500; font-size:12px; }
-  .pos { color:var(--green); } .neg { color:var(--red); }
-  button { background:#238636; color:#fff; border:0; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:12px; }
-  button:disabled { opacity:.45; cursor:default; }
-  button.ghost { background:transparent; border:1px solid var(--line); }
-  input { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:5px 8px; width:80px; }
-  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
-  .note { font-size:12px; color:var(--dim); line-height:1.5; }
-  h2 { font-size:16px; margin:22px 0 8px; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:11px; }
-  .pill.buy { background:#3fb95033; color:var(--green); } .pill.skip { background:#1f6feb33; color:var(--blue); }
-  .pill.error { background:#f8514933; color:var(--red); }
-  nav a { color:var(--blue); font-size:13px; text-decoration:none; margin-right:14px; }
-  #err { color:var(--red); font-size:13px; min-height:18px; }
-</style>
+<title>BitBot — Weather paper trading</title>
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<nav><a href="/">← Crypto</a><b>Weather</b></nav>
-<h1>Weather <span style="color:var(--dim);font-weight:400">Kalshi daily highs · paper only</span></h1>
-<div class="sub">LightGBM T_max + Bayesian Student-t calibration → $1-bracket probabilities · settles on The Weather Company</div>
-<div id="err"></div>
-<div id="cities">Loading…</div>
+<header class="topbar">
+  <span class="brand">BitBot</span>
+  <nav><a href="/">Crypto</a><a href="/weather" aria-current="page">Weather</a></nav>
+  <span class="spacer"></span>
+  <span id="clock"></span>
+  <span id="dots"></span>
+  <button class="ghost" id="pauseBtn">Pause</button>
+  <span id="countdown" class="num"></span>
+</header>
 
-<h2>Auto paper-trader <span class="sub">4×/day on GFS cycles (00/06/12/18Z)</span></h2>
-<div class="card">
-  <div class="row">
-    <label>Min edge <input id="wxThresh" type="number" value="0.03" step="0.01" min="0" max="0.5"></label>
-    <label>Max contracts (Kelly cap) <input id="wxContracts" type="number" value="1" min="1" max="100"></label>
-    <button id="wxStart" onclick="wxStart()">Start</button>
-    <button class="ghost" onclick="wxStop()">Stop</button>
-    <button class="ghost" onclick="wxCycle()">Run one cycle now</button>
-    <span id="wxStatus" class="note"></span>
+<h1>Weather <span class="sub">Kalshi daily highs, NYC + Chicago · paper only</span></h1>
+
+<section class="hero" id="hero" aria-live="polite">
+  <h2>Should it be trading right now?</h2>
+  <div class="why" id="whyLine"><div class="sk" style="height:2.4em"></div></div>
+  <div class="note" id="cycleLine"></div>
+</section>
+
+<div id="cities"><div class="card"><div class="sk">Loading markets…</div></div></div>
+
+<section>
+  <h2>Auto paper-trader <span class="sub">4×/day on GFS cycles</span></h2>
+  <div class="card">
+    <div class="row">
+      <label>Min edge <input id="wxThresh" type="number" value="0.03" step="0.01" min="0" max="0.5"></label>
+      <label>Max contracts <input id="wxContracts" type="number" value="10" min="1" max="100"></label>
+      <button id="wxStart">Start</button>
+      <button class="ghost" id="wxStop">Stop</button>
+      <button class="ghost" id="wxCycle">Run one cycle now</button>
+      <span id="wxStatus" class="note"></span>
+    </div>
+    <div class="note">Per city × (today + tomorrow): best fee-aware YES edge, 1 position per
+    event, intraday conditioning on observed max, NWS-disagreement rail. Sizing is fractional-Kelly.</div>
   </div>
-  <div class="note">Per city × (today + tomorrow): best fee-aware YES edge ≥ min, 1 position per event.
-  Intraday predictions condition on observed max-so-far. Backtests: NYC 28% / CHI 12% argmax over 60 events — thin edge, paper-sized.</div>
-</div>
+</section>
 
-<h2>Trader log</h2>
-<div class="card"><table id="cycles"><thead><tr>
-  <th>Time</th><th>City</th><th>Event</th><th>Action</th><th>Detail</th>
-</tr></thead><tbody></tbody></table></div>
+<section>
+  <h2>Trader log <span class="spacer"></span>
+    <span class="chips" id="cycleFilters" role="group" aria-label="Filter log">
+      <button class="chip" data-f="all" aria-pressed="true">All</button>
+      <button class="chip" data-f="buy" aria-pressed="false">Buys</button>
+      <button class="chip" data-f="skip" aria-pressed="false">Skips</button>
+      <button class="chip" data-f="error" aria-pressed="false">Errors</button>
+    </span>
+  </h2>
+  <div class="card twrap"><table id="cycles"><thead><tr>
+    <th>Time</th><th>City</th><th>Event</th><th>Action</th><th>Detail</th>
+  </tr></thead><tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div>
+</section>
 
-<p class="note" style="margin-top:18px">Method: GBM point forecast from prior-day obs + climatology (no NWP input in v1 —
-GFS shown/logged for future blending) × Normal-Gamma posterior over trailing-90d residuals,
-recalibrated every prediction (see σ adapt: calm ≈ 4–5°F, volatile ≈ 8°F). Edge net of Kalshi
-taker fee. Basis risk: trained on ERA5, settled on TWC — bias-corrected, residual reported.
-Bracket gaps (unlisted degrees) are dead outcomes; fairs use raw density mass.</p>
+<details class="method">
+  <summary>How it works (methodology)</summary>
+  <p class="note">Per-city LightGBM daily max (station obs, MSLP tendencies, soundings on NYC)
+  × Normal-Gamma posterior over trailing residuals, refit per prediction with
+  frontal/calm regimes. Edge is net of Kalshi taker fees. Settles on The Weather
+  Company; today's predictions condition on observed max-so-far.</p>
+</details>
+<div class="foot">BitBot paper system · no real orders.</div>
 
+<script src="/static/app.js"></script>
 <script>
-const $ = id => document.getElementById(id);
-async function jget(u){ const r = await fetch(u); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+"use strict";
+const { $, esc, fmt$, fmtC, jget, api, toast, confirmDlg, Poller, meter, etClock } = App;
+let cycleFilter = "all";
+let lastHealth = null;
 
-async function loadWx(){
+function renderTop(h) {
+  lastHealth = h;
+  const wx = (h.traders || {}).wx || {};
+  $("dots").innerHTML =
+    `<span title="Kalshi API"><span class="dot ${h.kalshi_ok ? "ok" : h.kalshi_ok === false ? "bad" : "unknown"}"></span>Kalshi</span>` +
+    `<span title="weather trader"><span class="dot ${wx.running ? "ok" : "unknown"}"></span>wx ${wx.running ? "on" : "off"}</span>`;
+}
+
+function renderHero(auto) {
+  const bits = [];
+  if (!auto.thread_running) bits.push(`The weather trader is <b>stopped</b> — nothing will trade until you start it below.`);
+  else {
+    bits.push(`Trader <b>running</b> on GFS cadence`);
+    if (auto.next_in_s != null) {
+      const h = Math.floor(auto.next_in_s / 3600), m = Math.round((auto.next_in_s % 3600) / 60);
+      bits.push(`next cycle in <b>${h > 0 ? h + "h " : ""}${m}m</b>`);
+    }
+  }
+  const last = auto.last;
+  if (last && last.results) {
+    bits.push("Latest: " + last.results.map((r) =>
+      `${esc(r.city || "?")} ${esc(r.target || "")} ${esc(r.action)}${r.reason ? ` (${esc(r.reason)})` : ""}`).join(" · "));
+  }
+  $("whyLine").innerHTML = bits.join(" ");
+  $("cycleLine").textContent = auto.config
+    ? `Edge ≥ ${auto.config.threshold} net of fees · ${auto.config.contracts}-contract Kelly cap · NWP rail ±${auto.config.max_gfs_gap ?? 6}°F`
+    : "";
+}
+
+async function loadWx() {
   try {
-    const o = await jget('/api/wx/overview');
-    $('cities').innerHTML = Object.values(o).map(c => {
-      const ds = Object.entries(c.dates).map(([date, d]) => {
-        if(d.error) return `<div class="card"><div class="k">${c.city} · ${date}</div><div class="s">${d.error}</div></div>`;
-        const p = d.pred;
-        const rows = d.brackets.map(b => {
-          const e = b.edge, hot = e != null && e >= 0.03;
-          const lbl = b.strike_type==='less' ? `≤${b.cap}` : b.strike_type==='greater' ? `≥${b.floor}` : `${b.floor}–${b.cap}`;
-          return `<tr style="${hot?'background:#3fb95022':''}"><td>${lbl}${hot?' ◀':''}</td>
-            <td>${b.yes_bid ?? '—'}</td><td>${b.yes_ask ?? '—'}</td><td>${b.fair.toFixed(3)}</td>
-            <td class="${e==null?'':(e>=0.03?'pos':'neg')}">${e?.toFixed(3) ?? '—'}</td>
-            <td>${b.yes_ask!=null ? `<button onclick="buy('${b.ticker}')">Buy</button>` : ''}</td></tr>`;
-        }).join('');
-        return `<h2>${c.city} · ${date} <span class="sub">${d.event}</span></h2>
-        <div class="grid">
-          <div class="card"><div class="k">Model high</div><div class="v">${p.pred}°F</div><div class="s">80% interval ${p.lo80}–${p.hi80}</div></div>
-          <div class="card"><div class="k">GFS / ensemble</div><div class="v">${p.gfs_max ?? '—'}°F</div><div class="s">ens ${p.ens_mean ?? '—'} ± ${p.ens_std ?? '—'}</div></div>
-          <div class="card"><div class="k">Calibration σ</div><div class="v">${p.sigma}°F</div><div class="s">bias ${p.bias} · obs-so-far ${p.obs_max_so_far ?? '—'}</div></div>
-          <div class="card"><div class="k">850hPa (12Z snd)</div><div class="v">${p.t850s == null ? '—' : (p.t850s*9/5+32).toFixed(1)+'°F'}</div><div class="s">24h chg ${p.t850s_chg24 == null ? '—' : (p.t850s_chg24*9/5).toFixed(1)+'°F'}</div></div>
-        </div>
-        <div class="card"><table><thead><tr><th>Bracket °F</th><th>Bid ¢</th><th>Ask ¢</th><th>Fair</th><th>Edge</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
-      }).join('');
-      return ds;
-    }).join('');
-  } catch(e){ $('err').textContent = 'weather: ' + e.message; }
+    const o = await jget("/api/wx/overview");
+    $("cities").innerHTML = Object.values(o).map((c) => Object.entries(c.dates).map(([date, d]) => {
+      if (d.error || !d.pred) return `<h2>${esc(c.city)} · ${esc(date)}</h2><div class="card"><div class="s">${esc(d.error || "unavailable")}</div></div>`;
+      const p = d.pred;
+      const gap = p.ndfd_max != null ? Math.abs(p.pred - p.ndfd_max) : (p.gfs_max != null ? Math.abs(p.pred - p.gfs_max) : null);
+      const rail = gap != null && gap > 6;
+      const rows = d.brackets.map((b) => {
+        const e = b.edge, hot = e != null && e >= 0.03;
+        const lbl = b.strike_type === "less" ? `≤${b.cap}` : b.strike_type === "greater" ? `≥${b.floor}` : `${b.floor}–${b.cap}`;
+        return `<tr class="${hot ? "hot" : ""}"><td><b>${lbl}</b>${hot ? " ◀" : ""}</td>
+          <td class="num">${b.yes_bid ?? "—"}</td><td class="num">${b.yes_ask ?? "—"}</td>
+          <td class="num">${b.fair.toFixed(3)}</td>
+          <td class="num ${e == null ? "" : e >= 0.03 ? "pos" : e < 0 ? "neg" : ""}">${e == null ? "—" : (e >= 0 ? "+" : "") + e.toFixed(3)}</td>
+          <td>${b.yes_ask != null ? `<button class="ghost" data-buy="${esc(b.ticker)}">Buy</button>` : ""}</td></tr>`;
+      }).join("");
+      return `<h2>${esc(c.city)} · ${esc(date)} <span class="sub">${esc(d.event)}</span></h2>
+      <div class="grid">
+        <div class="card"><div class="k">Model high</div><div class="v">${p.pred}°F</div><div class="s">80% interval ${p.lo80}–${p.hi80} · ${esc(p.regime || "")}</div></div>
+        <div class="card"><div class="k">NWS / GFS</div><div class="v">${p.ndfd_max ?? p.gfs_max ?? "—"}°F</div><div class="s">NDFD ${p.ndfd_max ?? "—"} · GFS ${p.gfs_max ?? "—"}${rail ? ' · <b class="neg">rail: standing down</b>' : ""}</div></div>
+        <div class="card"><div class="k">Calibration σ</div><div class="v">${p.sigma}°F</div><div class="s">bias ${p.bias} · obs-so-far ${p.obs_max_so_far ?? "—"}</div></div>
+        <div class="card"><div class="k">850hPa 12Z</div><div class="v">${p.t850s == null ? "—" : (p.t850s * 9 / 5 + 32).toFixed(1) + "°F"}</div><div class="s">24h Δ ${p.t850s_chg24 == null ? "—" : (p.t850s_chg24 * 9 / 5).toFixed(1) + "°F"}</div></div>
+      </div>
+      <div class="card twrap"><table><thead><tr><th>Bracket °F</th><th>Bid ¢</th><th>Ask ¢</th><th>Fair</th><th>Edge</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    }).join("")).join("");
+    document.querySelectorAll("[data-buy]").forEach((b) => b.onclick = () => buy(b.dataset.buy));
+  } catch (e) { $("cities").innerHTML = `<div class="card"><div class="s">Weather markets unavailable: ${esc(e.message)}</div></div>`; }
 }
 
-async function buy(ticker){
-  if(!confirm(`Paper-buy 1 YES @ ask on ${ticker}?`)) return;
-  const r = await fetch('/api/paper_trade',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({market_ticker:ticker, side:'yes', contracts:1})});
-  if(!r.ok){ alert('rejected: ' + await r.text()); return; }
-  loadAuto();
+async function buy(ticker) {
+  const ok = await confirmDlg({ title: "Paper-buy 1 YES?",
+    body: `${ticker} at the live ask. Paper only.`, okLabel: "Buy YES" });
+  if (!ok) return;
+  try {
+    const r = await api("/api/paper_trade", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market_ticker: ticker, side: "yes", contracts: 1 }) });
+    toast(`Recorded (#${r.trade_id} @ ${r.paid_cents}¢)`, "ok");
+  } catch (e) { toast("Rejected: " + e.message, "err"); }
 }
 
-async function loadAuto(){
-  const s = await jget('/api/wx/auto');
-  $('wxThresh').value = s.config.threshold; $('wxContracts').value = s.config.contracts;
-  $('wxStatus').textContent = s.thread_running ? `RUNNING · next in ${s.next_in_s ?? '?'}s` : 'stopped';
-  $('wxStart').disabled = s.thread_running;
-  document.querySelector('#cycles tbody').innerHTML = (s.cycles||[]).map(r =>
-    `<tr><td style="white-space:nowrap">${(r.ts||'').slice(5,16)}</td><td>${r.city||''}</td>
-     <td style="font-size:12px">${r.event_ticker||''}</td>
-     <td><span class="pill ${r.action}">${r.action}</span></td>
-     <td style="text-align:left;font-size:12px">${r.detail||''}</td></tr>`).join('')
-    || '<tr><td colspan="5">No cycles yet</td></tr>';
+async function loadAuto() {
+  try {
+    const s = await jget("/api/wx/auto");
+    $("wxThresh").value = s.config.threshold; $("wxContracts").value = s.config.contracts;
+    $("wxStatus").textContent = s.thread_running ? `RUNNING · next in ${s.next_in_s != null ? Math.floor(s.next_in_s / 3600) + "h " + Math.round((s.next_in_s % 3600) / 60) + "m" : "?"}` : "Stopped.";
+    $("wxStart").disabled = !!s.thread_running;
+    renderHero(s);
+    const rows = (s.cycles || []).filter((r) => cycleFilter === "all" || r.action === cycleFilter);
+    document.querySelector("#cycles tbody").innerHTML = rows.map((r) =>
+      `<tr><td style="white-space:nowrap">${esc((r.ts || "").slice(5, 16))}</td><td>${esc(r.city || "")}</td>
+       <td style="font-size:12px">${esc(r.event_ticker || "")}</td>
+       <td><span class="pill ${r.action}">${esc(r.action)}</span></td>
+       <td style="text-align:left;font-size:12px">${esc(r.detail || "")}</td></tr>`).join("")
+      || `<tr><td colspan="5" class="empty">No cycles logged yet.</td></tr>`;
+  } catch (e) { $("wxStatus").textContent = "status unavailable: " + e.message; }
 }
-async function wxStart(){
-  const r = await fetch('/api/wx/auto/start',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({threshold:+$('wxThresh').value, contracts:+$('wxContracts').value})});
-  if(!r.ok){ alert('start failed: ' + await r.text()); return; }
-  loadAuto();
-}
-async function wxStop(){ await fetch('/api/wx/auto/stop',{method:'POST'}); loadAuto(); }
-async function wxCycle(){ await fetch('/api/wx/auto/cycle',{method:'POST'}); loadAuto(); }
 
-loadWx(); loadAuto();
-setInterval(() => { loadWx(); loadAuto(); }, 60000);
+function boot() {
+  document.querySelectorAll("#cycleFilters .chip").forEach((ch) => ch.onclick = () => {
+    document.querySelectorAll("#cycleFilters .chip").forEach((c) => c.setAttribute("aria-pressed", "false"));
+    ch.setAttribute("aria-pressed", "true");
+    cycleFilter = ch.dataset.f; loadAuto();
+  });
+  $("wxStart").onclick = async () => {
+    const ok = await confirmDlg({ title: "Start weather paper-trader?",
+      body: `4×/day on GFS cycles, edge ≥ ${$("wxThresh").value} net of fees. Paper only.`, okLabel: "Start" });
+    if (!ok) return;
+    try {
+      await api("/api/wx/auto/start", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threshold: +$("wxThresh").value, contracts: +$("wxContracts").value }) });
+      toast("Weather trader started.", "ok"); loadAuto();
+    } catch (e) { toast("Start failed: " + e.message, "err"); }
+  };
+  $("wxStop").onclick = async () => { await api("/api/wx/auto/stop", { method: "POST" }); toast("Weather trader stopped."); loadAuto(); };
+  $("wxCycle").onclick = async () => { toast("Running one cycle…"); await api("/api/wx/auto/cycle", { method: "POST" }); loadAuto(); };
+  $("pauseBtn").onclick = () => {
+    App.Poller.paused = !App.Poller.paused;
+    $("pauseBtn").textContent = App.Poller.paused ? "Resume" : "Pause";
+  };
+  App.Poller.add(async () => {
+    const h = await App.api("/api/health").catch(() => null);
+    if (h) renderTop(h);
+    etClock($("clock"));
+  }, 30000);
+  App.Poller.add(loadWx, 60000);
+  App.Poller.add(loadAuto, 30000);
+  let remain = 30;
+  setInterval(() => {
+    etClock($("clock"));
+    if (!App.Poller.paused && !document.hidden) {
+      remain = remain <= 1 ? 30 : remain - 1;
+      $("countdown").textContent = `refresh ${remain}s`;
+    } else $("countdown").textContent = "paused";
+  }, 1000);
+  App.Poller.start();
+}
+document.addEventListener("DOMContentLoaded", boot);
 </script>
 </body>
 </html>

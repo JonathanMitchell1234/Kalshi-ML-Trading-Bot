@@ -139,6 +139,11 @@ def stacked_prediction(asset: str = "BTC") -> dict:
     btc1 = load_or_fetch(asset, "1m", days=3)
     b15 = {a: load_or_fetch(a, "15m", days=30) for a in leaders}
     b1 = {a: load_or_fetch(a, "1m", days=3) for a in leaders}
+    # trim: the live row needs ~100 bars of history for trailing windows, not months
+    btc15 = btc15.tail(500).reset_index(drop=True)
+    btc1 = btc1.tail(4000).reset_index(drop=True)
+    b15 = {a: df.tail(500).reset_index(drop=True) for a, df in b15.items()}
+    b1 = {a: df.tail(4000).reset_index(drop=True) for a, df in b1.items()}
 
     row = latest_row(btc15, btc1, b15, b1, S["feats"], leaders, asset, S.get("pca"))
     X1 = row[S["feats"]].values.reshape(1, -1)

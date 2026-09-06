@@ -3,274 +3,384 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BitBot — BTC/Kalshi Dashboard</title>
-<style>
-  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --txt:#e6edf3; --dim:#8b949e;
-          --green:#3fb950; --red:#f85149; --blue:#58a6ff; --amber:#d29922; }
-  * { box-sizing:border-box; font-family:-apple-system,system-ui,sans-serif; }
-  body { background:var(--bg); color:var(--txt); margin:0; padding:20px; max-width:1100px; margin-inline:auto; }
-  h1 { font-size:22px; margin:0 0 4px; }
-  .sub { color:var(--dim); font-size:13px; margin-bottom:16px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:16px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
-  .card .k { font-size:11px; text-transform:uppercase; color:var(--dim); letter-spacing:.5px; }
-  .card .v { font-size:22px; font-weight:650; margin-top:4px; }
-  .card .s { font-size:12px; color:var(--dim); margin-top:2px; }
-  .up { color:var(--green); } .down { color:var(--red); }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; }
-  th:first-child,td:first-child { text-align:left; }
-  th { color:var(--dim); font-weight:500; font-size:12px; }
-  .pos { color:var(--green); } .neg { color:var(--red); }
-  button { background:#238636; color:#fff; border:0; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:12px; }
-  button:disabled { opacity:.45; cursor:default; }
-  button.ghost { background:transparent; border:1px solid var(--line); }
-  input { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:5px 8px; width:80px; }
-  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
-  .note { font-size:12px; color:var(--dim); line-height:1.5; }
-  h2 { font-size:16px; margin:22px 0 8px; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:11px; }
-  .pill.open { background:#1f6feb33; color:var(--blue); } .pill.won { background:#3fb95033; color:var(--green); }
-  .pill.lost { background:#f8514933; color:var(--red); } .pill.void { background:#8b949e33; color:var(--dim); }
-  #err { color:var(--red); font-size:13px; min-height:18px; }
-</style>
+<title>BitBot — Crypto paper trading</title>
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<h1>BitBot <span style="color:var(--dim);font-weight:400">BTC → Kalshi paper-trading · <a href="/weather" style="font-size:14px">Weather tab →</a></span></h1>
-<div class="sub">LightGBM 15-min predictor vs live <b>KXBTC</b> hourly brackets · paper trades only, no real orders</div>
-<div id="err"></div>
+<header class="topbar">
+  <span class="brand">BitBot</span>
+  <nav><a href="/" aria-current="page">Crypto</a><a href="/weather">Weather</a></nav>
+  <span class="spacer"></span>
+  <span id="clock" title="Eastern time"></span>
+  <span id="dots" title="Service status"></span>
+  <button class="ghost" id="pauseBtn" title="Pause auto-refresh">Pause</button>
+  <span id="countdown" class="num" title="Next refresh"></span>
+</header>
 
-<div class="grid" id="overview">Loading…</div>
+<h1>Crypto <span class="sub">15-min BTC/ETH binaries · paper only, no real orders</span></h1>
 
-<h2>15-min Up/Down <span class="sub" id="udLine"></span></h2>
-<div class="card"><table id="updown"><thead><tr>
-  <th>Side</th><th>Ask ¢</th><th>Model fair</th><th>Edge (net fee)</th><th></th>
-</tr></thead><tbody><tr><td colspan="5">Loading…</td></tr></tbody></table></div>
+<section class="hero" id="hero" aria-live="polite">
+  <h2>Should it be trading right now?</h2>
+  <div class="why" id="whyLine"><div class="sk" style="height:2.4em"></div></div>
+  <div class="grid" id="meters" style="margin:10px 0 0"></div>
+  <div class="note" id="cycleLine"></div>
+</section>
 
-<h2>Live brackets <span class="sub" id="eventLine"></span></h2>
-<div class="card"><table id="markets"><thead><tr>
-  <th>Bracket</th><th>Bid ¢</th><th>Ask ¢</th><th>Model fair</th><th>Edge</th><th></th>
-</tr></thead><tbody><tr><td colspan="6">Loading…</td></tr></tbody></table></div>
+<section>
+  <h2>Market snapshot <span class="sub" id="asof"></span></h2>
+  <div class="grid" id="overview"><div class="card"><div class="sk">loading</div></div><div class="card"><div class="sk">loading</div></div><div class="card"><div class="sk">loading</div></div></div>
+</section>
 
-<h2>Results</h2>
-<div class="grid" id="stats"></div>
+<section>
+  <h2>Live 15-min markets <span class="sub" id="udLine"></span></h2>
+  <div class="card twrap"><table id="updown"><thead><tr>
+    <th>Market</th><th>Target</th><th>Side</th><th>Ask ¢</th><th>Model fair</th><th>Edge net</th><th>Closes</th><th></th>
+  </tr></thead><tbody><tr><td colspan="8" class="empty">Loading…</td></tr></tbody></table></div>
+</section>
 
-<h2>Auto paper-trader</h2>
-<div class="card">
-  <div class="row">
-    <label>Every <input id="atInterval" type="number" value="15" min="5" max="60"> min</label>
-    <label>Min edge <input id="atThresh" type="number" value="0.03" step="0.01" min="0" max="0.9"></label>
-    <label>Min |P−.5| <input id="atConf" type="number" value="0.10" step="0.01" min="0" max="0.45"></label>
-    <label>Max contracts (Kelly cap) <input id="atContracts" type="number" value="1" min="1" max="100"></label>
-    <button id="atStart" onclick="autoStart()">Start paper run</button>
-    <button class="ghost" onclick="autoStop()">Stop</button>
-    <button class="ghost" onclick="autoCycle()">Run one cycle now</button>
-    <span id="atStatus" class="note"></span>
+<section>
+  <h2>Results <span class="spacer"></span><button class="ghost" id="resolveBtn">Resolve now</button></h2>
+  <div class="grid" id="stats"></div>
+  <div class="card"><div class="k">Paper equity (realized, $)</div>
+    <svg class="spark" id="equitySpark" role="img" aria-label="Equity curve"></svg>
+    <div class="note" id="equityLine"></div>
   </div>
-  <div class="note">Each cycle: settle open trades → fresh model prediction → paper-buy the
-  highest-edge YES bracket (ask 2–98¢, edge ≥ min), else log the skip reason. YES-side only.
-  20-min cycles ≈ 72 decisions/day. Leave this page/server running.</div>
-</div>
+</section>
 
-<h2>Auto-trader log</h2>
-<div class="card"><table id="cycles"><thead><tr>
-  <th>Time (UTC)</th><th>Event</th><th>Action</th><th>Detail</th><th>Spot → Pred</th>
-</tr></thead><tbody></tbody></table></div>
-
-<h2>Backtest on settled Kalshi events</h2>
-<div class="card">
-  <div class="row">
-    <label>Events <input id="btN" type="number" value="48" min="1" max="200"></label>
-    <label>Signal lead (min) <input id="btLead" type="number" value="30" min="5" max="55"></label>
-    <button id="btRun" onclick="runBacktest()">Run backtest</button>
-    <span id="btStatus" class="note"></span>
+<section>
+  <h2>Auto paper-trader</h2>
+  <div class="card">
+    <div class="row">
+      <label>Every <input id="atInterval" type="number" value="15" min="5" max="60"> min</label>
+      <label>Min edge <input id="atThresh" type="number" value="0.03" step="0.01" min="0" max="0.9"></label>
+      <label>Min |P−.5| <input id="atConf" type="number" value="0.10" step="0.01" min="0" max="0.45"></label>
+      <label>Max contracts <input id="atContracts" type="number" value="10" min="1" max="100"></label>
+      <button id="atStart">Start paper run</button>
+      <button class="ghost" id="atStop">Stop</button>
+      <button class="ghost" id="atCycle">Run one cycle now</button>
+      <span id="atStatus" class="note"></span>
+    </div>
+    <div class="note">Each cycle settles open trades, refreshes bars, and paper-buys the best
+    fee-aware edge at high conviction — else logs the reason. Sizing is fractional-Kelly
+    (tenth, 2% cap). Leave the server running; this page may be closed.</div>
   </div>
-  <div class="note">Signal = model prediction 15 min ahead, made <i>lead</i> minutes before hourly expiry.
-  Pick = $100 bracket containing the prediction. Ground truth = Kalshi's settled <b>result</b> + CF BRTI
-  <b>expiration_value</b>. Measures bracket hit-rate (entry prices aren't archived), not P&amp;L.</div>
-</div>
+</section>
 
-<h2>Paper trades <button class="ghost" onclick="resolve()">Resolve now</button></h2>
-<div class="card"><table id="trades"><thead><tr>
-  <th>#</th><th>Market</th><th>Side</th><th>×</th><th>Paid ¢</th><th>Edge</th><th>Status</th><th>P&amp;L ¢</th>
-</tr></thead><tbody></tbody></table></div>
+<section>
+  <h2>Trader log <span class="spacer"></span>
+    <span class="chips" id="cycleFilters" role="group" aria-label="Filter log">
+      <button class="chip" data-f="all" aria-pressed="true">All</button>
+      <button class="chip" data-f="buy" aria-pressed="false">Buys</button>
+      <button class="chip" data-f="skip" aria-pressed="false">Skips</button>
+      <button class="chip" data-f="error" aria-pressed="false">Errors</button>
+    </span>
+  </h2>
+  <div class="card twrap"><table id="cycles"><thead><tr>
+    <th>Time</th><th>Event</th><th>Action</th><th>Detail</th><th class="hide-sm">Spot → signal</th>
+  </tr></thead><tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div>
+</section>
 
-<h2>Evaluation <span class="sub">per-version attribution · Wilson 95% CIs · realized only</span></h2>
-<div class="card"><table id="eval"><thead><tr>
-  <th>Model version</th><th>Trades</th><th>Settled</th><th>W</th><th>Win rate [95% CI]</th><th>P&amp;L</th>
-</tr></thead><tbody></tbody></table>
-<div class="row"><span class="note" id="equity"></span></div>
-<div class="sub" style="margin-top:6px">Reliability (stored P vs realized, paper):</div>
-<table id="rel"><thead><tr><th>P range</th><th>n</th><th>Mean P</th><th>Hit [95% CI]</th></tr></thead><tbody></tbody></table></div>
+<section>
+  <h2>Paper trades</h2>
+  <div class="card twrap"><table id="trades"><thead><tr>
+    <th>#</th><th>Market</th><th>Side</th><th>×</th><th>Paid ¢</th><th>Edge</th><th>Model</th><th>Status</th><th>P&amp;L</th>
+  </tr></thead><tbody><tr><td colspan="9" class="empty">Loading…</td></tr></tbody></table></div>
+</section>
 
-<p class="note" style="margin-top:18px">Method: direction probability = isotonic-calibrated LightGBM
-(15m technicals + 1m microstructure + ETH/SOL/XRP leads; test AUC 0.54, 58% hits
-at |P−.5|≥.10). A GRU + logistic stack was also built and evaluated — GRU test AUC ≈ 0.50
-with zero high-conviction outputs, so it stays out of production (shown for monitoring).
-Auto-trader acts only at |P−.5| ≥ 0.10 (60/40 rule): P≥.6 → YES above spot, P≤.4 → YES below.
-Bracket fair = Normal(reg-pred, σ) mass, σ = holdout RMSE × √(min-to-expiry/15).
-Edge is <b>net of Kalshi taker fee</b> (7¢×P×(1−P)/contract); P&amp;L likewise.
-Kalshi settles on CF BRTI; spot is Binance.US. Paper trades settle on official <b>result</b>.</p>
+<section>
+  <h2>Evaluation <span class="sub">per-version attribution · Wilson 95% CIs · realized only</span></h2>
+  <div class="card twrap"><table id="eval"><thead><tr>
+    <th>Model version</th><th>Trades</th><th>Settled</th><th>W</th><th>Win rate [95% CI]</th><th>P&amp;L</th>
+  </tr></thead><tbody><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table>
+  <div class="sub" style="margin-top:8px">Reliability (stored P vs realized):</div>
+  <table id="rel"><thead><tr><th>P range</th><th>n</th><th>Mean P</th><th>Hit [95% CI]</th></tr></thead>
+  <tbody><tr><td colspan="4" class="empty">—</td></tr></tbody></table></div>
+</section>
 
+<section>
+  <h2>Backtest <span class="sub">settled Kalshi windows · conviction policy replay</span></h2>
+  <div class="card">
+    <div class="row">
+      <label>Events <input id="btN" type="number" value="200" min="1" max="400"></label>
+      <label>Asset <select id="btAsset"><option>BTC</option><option>ETH</option></select></label>
+      <button id="btRun">Run backtest</button>
+      <span id="btStatus" class="note"></span>
+    </div>
+  </div>
+</section>
+
+<details class="method">
+  <summary>How it works (methodology)</summary>
+  <p class="note">Direction probability = seed-averaged LightGBM, isotonic-calibrated on
+  purged holdout folds (15m technicals, 1m microstructure, cross-asset leads, Hyperliquid
+  funding, Coinbase premium, taker CVD, PCA factors; Bybit spread on BTC only).
+  Trades only at |P−.5| ≥ 0.10 with fee-aware edge ≥ 0.03 (YES if P≥.6, NO if P≤.4),
+  within 5 min of window open. Kalshi settles hourly binaries on CF BRTI; spot is
+  Binance.US. Paper trades settle on the official result, net of taker fees.</p>
+</details>
+<div class="foot" id="foot"></div>
+
+<script src="/static/app.js"></script>
 <script>
-const $ = id => document.getElementById(id);
-const fmt$ = x => x == null ? '—' : '$' + Number(x).toLocaleString(undefined,{maximumFractionDigits:2});
+"use strict";
+const { $, esc, fmt$, fmtC, pct, jget, api, toast, confirmDlg, Poller, sparkline, meter, etClock, ago } = App;
+let cycleFilter = "all";
+let lastHealth = null, lastOv = null;
 
-async function jget(u){ const r = await fetch(u); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+/* ---------- top bar ---------- */
+function renderTop(h) {
+  lastHealth = h;
+  etClock($("clock"));
+  const dots = [];
+  dots.push(`<span title="Kalshi API"><span class="dot ${h.kalshi_ok ? "ok" : h.kalshi_ok === false ? "bad" : "unknown"}"></span>Kalshi</span>`);
+  const age = h.data_age_min && h.data_age_min.btc_1m;
+  dots.push(`<span title="Market data age"><span class="dot ${age == null ? "unknown" : age < 20 ? "ok" : age < 60 ? "warn" : "bad"}"></span>data ${age == null ? "?" : age + "m"}</span>`);
+  for (const [k, t] of [["crypto", "auto"], ["wx", "wx"]]) {
+    const s = (h.traders || {})[k] || {};
+    dots.push(`<span title="${k} trader"><span class="dot ${s.running ? "ok" : "unknown"}"></span>${k} ${s.running ? "on" : "off"}</span>`);
+  }
+  $("dots").innerHTML = dots.join(" ");
+}
 
-async function loadOverview(){
-  try {
-    const o = await jget('/api/overview');
-    const dir = o.pred_price >= o.spot ? 'up' : 'down';
-    const ps = o.p_stack;
-    const zone = ps == null ? '' : (ps >= 0.6 ? 'up' : (ps <= 0.4 ? 'down' : ''));
-    const zoneTxt = ps == null ? 'stack not trained' : (ps >= 0.6 ? 'LONG zone' : (ps <= 0.4 ? 'SHORT zone' : 'chop — no trade'));
-    $('overview').innerHTML = `
-      <div class="card"><div class="k">BTC spot</div><div class="v">${fmt$(o.spot)}</div><div class="s">${o.asof}</div></div>
-      <div class="card"><div class="k">Model: next 15m</div><div class="v ${dir}">${fmt$(o.pred_price)}</div><div class="s">reg point estimate</div></div>
-      <div class="card"><div class="k">Stack P(up) — calibrated</div><div class="v ${zone}">${ps == null ? '—' : (ps*100).toFixed(1)+'%'}</div><div class="s">LGBM ${o.p_lgbm ?? '—'} · GRU ${o.p_gru ?? '—'} · ${zoneTxt}</div></div>
-      <div class="card"><div class="k">Live event</div><div class="v" style="font-size:15px">${o.event}</div><div class="s">${o.event_title||''}</div></div>
-      <div class="card"><div class="k">Closes in</div><div class="v">${o.minutes_to_close ?? '—'}<span style="font-size:13px"> min</span></div><div class="s">${o.close_time||''} · ${o.n_active} brackets</div></div>`;
-    $('eventLine').textContent = `${o.event} · closes ${o.close_time||''}`;
-    const udAll = o.updown || {};
-    const names = Object.keys(udAll).filter(k => k === k.toUpperCase() && k.length <= 4);
-    if(!names.length){
-      document.querySelector('#updown tbody').innerHTML = `<tr><td colspan="5">${(udAll && udAll.error) || 'no live 15m markets'}</td></tr>`;
-      $('udLine').textContent = '';
-    } else {
-      $('udLine').textContent = names.map(k => {
-        const u = udAll[k]; return u.ticker ? `${k} ${u.event} → $${Number(u.target).toLocaleString()} (${u.minutes_to_close}m)` : `${k}: ${u.error||'?'}`;
-      }).join(' · ');
-      const row = (k, u, side, ask, f) => {
-        const e = f ? f.edge : null;
-        const ec = e == null ? '' : (e >= 0.03 ? 'pos' : (e < 0 ? 'neg' : ''));
-        const hot = e != null && e >= 0.03;
-        return `<tr style="${hot?'background:#3fb95022':''}">
-          <td><b>${k} ${side}</b>${hot?' ◀ model pick':''}</td><td>${ask ?? '—'}</td>
-          <td>${f ? f.fair.toFixed(3) : '—'}</td><td class="${ec}">${e?.toFixed(3) ?? '—'}</td>
-          <td>${ask!=null ? `<button onclick="buy('${u.ticker}','${side.toLowerCase()}')">Paper buy ${side}</button>` : ''}</td></tr>`;
-      };
-      document.querySelector('#updown tbody').innerHTML = names.map(k => {
-        const u = udAll[k];
-        if(!u.ticker) return `<tr><td colspan="5">${k}: ${u.error||'unavailable'}</td></tr>`;
-        return row(k, u, 'YES', u.yes_ask, u.yes) + row(k, u, 'NO', u.no_ask, u.no);
-      }).join('');
+/* ---------- hero: why trade / why not ---------- */
+function renderHero(h, ov, auto) {
+  const v = (h && h.vol) || {};
+  const traders = (h && h.traders) || {};
+  const cr = traders.crypto || {};
+  const bits = [];
+  if (!cr.running) {
+    bits.push(`The crypto trader is <b>stopped</b> — nothing will trade until you start it below.`);
+  } else {
+    bits.push(`Trader <b>running</b>`);
+    if (cr.next_in_s != null) bits.push(`next cycle in <b>${Math.max(0, Math.round(cr.next_in_s / 60))} min</b>`);
+  }
+  if (v.label) {
+    bits.push(`market is <b>${esc(v.label)}</b> (${v.bps_24h} bps/15m vs ${v.bps_7d} 7d avg)`);
+    if (v.label === "dead calm" || v.label === "thin")
+      bits.push(` Chop like this rarely clears the conviction gate — standing down is the strategy working, not a bug.`);
+  }
+  const last = cr.last;
+  if (last && last.action) {
+    const rs = (last.results || [last]).map((r) =>
+      `${esc(r.asset || "")} ${esc(r.action)}${r.reason ? ` (${esc(r.reason)})` : ""}${r.p_stack != null ? ` p=${r.p_stack}` : ""}`).join(" · ");
+    bits.push(`Last cycle: <b>${esc(last.action)}</b> — ${rs}.`);
+  }
+  $("whyLine").innerHTML = bits.join(" ");
+  const conf = parseFloat(($("atConf") && $("atConf").value) || (auto.config && auto.config.min_confidence) || 0.10);
+  const cards = [];
+  const probs = {};
+  for (const k of ["BTC", "ETH"]) {
+    const u = ov && ov.updown && ov.updown[k];
+    probs[k] = u && u.p_stack != null ? u.p_stack : (k === "BTC" && ov ? ov.p_stack : null);
+    cards.push(`<div class="card"><div class="k">${k} P(up) · gate ±${conf.toFixed(2)}</div><div id="meter-${k}"></div></div>`);
+  }
+  $("meters").innerHTML = cards.join("");
+  for (const k of ["BTC", "ETH"]) meter($("meter-" + k), probs[k], conf);
+  $("cycleLine").textContent = cr.running && cr.last && cr.last.results
+    ? "Latest decision per asset: " + cr.last.results.map((r) => `${r.asset || "?"}: ${r.action}${r.reason ? ` (${r.reason})` : ""}`).join(" · ")
+    : "";
+}
+
+/* ---------- snapshot + markets ---------- */
+function renderOverview(o) {
+  lastOv = o;
+  $("asof").textContent = o.asof ? `as of ${o.asof}` : "";
+  const dir = o.pred_price >= o.spot ? "up" : "down";
+  $("overview").innerHTML = `
+    <div class="card"><div class="k">BTC spot</div><div class="v">${fmt$(o.spot, 0)}</div><div class="s">Binance.US</div></div>
+    <div class="card"><div class="k">Model next 15m</div><div class="v ${dir}">${fmt$(o.pred_price, 0)}</div><div class="s">regression center</div></div>
+    <div class="card"><div class="k">Stack P(up)</div><div class="v">${o.p_stack == null ? "—" : pct(o.p_stack)}</div><div class="s">calibrated LGBM${o.p_gru != null ? " · GRU " + pct(o.p_gru) : ""}</div></div>`;
+  const ud = o.updown || {};
+  const names = Object.keys(ud).filter((k) => /^[A-Z]{2,4}$/.test(k));
+  $("udLine").textContent = names.map((k) => {
+    const u = ud[k];
+    return u.ticker ? `${k} → $${Number(u.target).toLocaleString()} (${u.minutes_to_close}m left)` : `${k}: ${u.error || "?"}`;
+  }).join(" · ");
+  const rows = [];
+  for (const k of names) {
+    const u = ud[k];
+    if (!u.ticker) { rows.push(`<tr><td colspan="8" class="empty">${esc(k)}: ${esc(u.error || "unavailable")}</td></tr>`); continue; }
+    for (const [side, ask, f] of [["YES", u.yes_ask, u.yes], ["NO", u.no_ask, u.no]]) {
+      const e = f ? f.edge : null;
+      const hot = e != null && e >= 0.03;
+      rows.push(`<tr class="${hot ? "hot" : ""}">
+        <td><b>${k}</b></td><td class="num">${fmt$(u.target, 0)}</td>
+        <td>${side}${hot ? " ◀" : ""}</td><td class="num">${ask ?? "—"}</td>
+        <td class="num">${f ? f.fair.toFixed(3) : "—"}</td>
+        <td class="num ${e == null ? "" : e >= 0.03 ? "pos" : e < 0 ? "neg" : ""}">${e == null ? "—" : (e >= 0 ? "+" : "") + e.toFixed(3)}</td>
+        <td class="num">${u.minutes_to_close ?? "—"}m</td>
+        <td>${ask != null ? `<button class="ghost" data-buy="${esc(u.ticker)}|${side.toLowerCase()}">Buy</button>` : ""}</td></tr>`);
     }
-  } catch(e){ $('err').textContent = 'overview: ' + e.message; }
+  }
+  document.querySelector("#updown tbody").innerHTML = rows.join("") || `<tr><td colspan="8" class="empty">No live 15-min markets.</td></tr>`;
+  document.querySelectorAll("[data-buy]").forEach((b) => b.onclick = () => {
+    const [t, s] = b.dataset.buy.split("|"); buy(t, s);
+  });
 }
 
-async function loadMarkets(){
+async function buy(ticker, side) {
+  const ok = await confirmDlg({ title: `Paper-buy 1 ${side.toUpperCase()}?`,
+    body: `${ticker} at the live ask. Paper only — settles against Kalshi's official result.`,
+    okLabel: `Buy ${side.toUpperCase()}` });
+  if (!ok) return;
   try {
-    const m = await jget('/api/markets');
-    const tb = document.querySelector('#markets tbody');
-    tb.innerHTML = m.brackets.map(b => {
-      const e = b.edge, ec = e == null ? '' : (e >= 0.05 ? 'pos' : (e < 0 ? 'neg' : ''));
-      const isPred = m.pred_price >= (b.floor||0) && m.pred_price < ((b.cap)||(b.floor||0)+100) && b.strike_type==='between';
-      return `<tr style="${isPred?'background:#1f6feb22':''}">
-        <td>${b.subtitle}${isPred?' ◀ model':''}</td>
-        <td>${b.yes_bid ?? '—'}</td><td>${b.yes_ask ?? '—'}</td>
-        <td>${b.fair?.toFixed(3)}</td><td class="${ec}">${e?.toFixed(3) ?? '—'}</td>
-        <td>${b.yes_ask!=null ? `<button onclick="buy('${b.ticker}')">Paper buy YES</button>` : ''}</td></tr>`;
-    }).join('') || '<tr><td colspan="6">No priced brackets</td></tr>';
-  } catch(e){ $('err').textContent = 'markets: ' + e.message; }
+    const r = await api("/api/paper_trade", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market_ticker: ticker, side, contracts: 1 }) });
+    toast(`Paper order recorded (#${r.trade_id} @ ${r.paid_cents}¢, fair ${r.fair})`, "ok");
+    loadStats(); loadTrades();
+  } catch (e) { toast("Order rejected: " + e.message, "err"); }
 }
 
-async function buy(ticker, side){
-  side = side || 'yes';
-  if(!confirm(`Paper-buy 1 ${side.toUpperCase()} @ ask on ${ticker}?`)) return;
-  const r = await fetch('/api/paper_trade',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({market_ticker:ticker, side:side, contracts:1})});
-  if(!r.ok){ alert('order rejected: ' + await r.text()); return; }
-  loadStats(); loadTrades();
-}
-
-async function loadStats(){
-  const s = await jget('/api/stats');
-  const p = s.paper, b = s.backtest;
-  $('stats').innerHTML = `
-    <div class="card"><div class="k">Paper trades</div><div class="v">${p.total}</div><div class="s">${p.open} open · ${p.settled} settled</div></div>
-    <div class="card"><div class="k">Paper win rate</div><div class="v">${p.win_rate==null?'—':(p.win_rate*100).toFixed(1)+'%'}</div><div class="s">${p.wins}W / ${p.losses}L</div></div>
-    <div class="card"><div class="k">Paper P&amp;L</div><div class="v ${p.pnl_cents>=0?'pos':'neg'}">$${p.pnl_dollars}</div><div class="s">${p.pnl_cents} ¢</div></div>
-    <div class="card"><div class="k">Backtest hit-rate</div><div class="v">${b.hit_rate==null?'—':(b.hit_rate*100).toFixed(1)+'%'}</div><div class="s">${b.hits??0}/${b.n_scored??0} brackets · run #${b.run_id??'—'}</div></div>
-    <div class="card"><div class="k">Backtest err15</div><div class="v">${b.mean_err15==null?'—':'$'+b.mean_err15}</div><div class="s">mean |pred − actual T+15m|</div></div>`;
-  loadEval();
-}
-
-async function loadEval(){
+/* ---------- results ---------- */
+async function loadStats() {
   try {
-    const e = await jget('/api/eval');
-    document.querySelector('#eval tbody').innerHTML = e.versions.map(v =>
-      `<tr><td style="font-size:12px">${v.version}</td><td>${v.trades}</td><td>${v.settled}</td><td>${v.wins}</td>
-       <td>${v.win_rate==null?'—':(v.win_rate*100).toFixed(1)+'% ['+(v.ci95[0]*100).toFixed(0)+'–'+(v.ci95[1]*100).toFixed(0)+']'}</td>
-       <td class="${v.pnl_cents>=0?'pos':'neg'}">${v.pnl_cents}¢ (${v.open} open)</td></tr>`).join('')
-      || '<tr><td colspan="6">No trades yet</td></tr>';
+    const s = await jget("/api/stats");
+    const p = s.paper;
+    $("stats").innerHTML = `
+      <div class="card"><div class="k">Paper trades</div><div class="v">${p.total}</div><div class="s">${p.open} open · ${p.settled} settled</div></div>
+      <div class="card"><div class="k">Win rate</div><div class="v">${p.win_rate == null ? "—" : pct(p.win_rate)}</div><div class="s">${p.wins}W / ${p.losses}L settled</div></div>
+      <div class="card"><div class="k">Paper P&amp;L</div><div class="v ${p.pnl_cents >= 0 ? "pos" : "neg"}">${fmtC(p.pnl_cents)}</div><div class="s">net of fees</div></div>`;
+    loadEval();
+  } catch (e) { $("stats").innerHTML = `<div class="card"><div class="s">Stats unavailable: ${esc(e.message)}</div></div>`; }
+}
+
+async function loadEval() {
+  try {
+    const e = await api("/api/eval");
+    const tb = document.querySelector("#eval tbody");
+    tb.innerHTML = e.versions.map((v) =>
+      `<tr><td style="font-size:12px">${esc(v.version) || "(unstamped)"}</td><td class="num">${v.trades}</td><td class="num">${v.settled}</td><td class="num">${v.wins}</td>
+       <td class="num">${v.win_rate == null ? "—" : pct(v.win_rate) + ` <span class="note">[${pct(v.ci95[0], 0)}–${pct(v.ci95[1], 0)}]</span>`}</td>
+       <td class="num ${v.pnl_cents >= 0 ? "pos" : "neg"}">${fmtC(v.pnl_cents)}${v.open ? ` (${v.open} open)` : ""}</td></tr>`).join("")
+      || `<tr><td colspan="6" class="empty">No trades yet — paper history builds here.</td></tr>`;
     const q = e.equity;
-    $('equity').textContent = `Equity: $${(q.total_cents/100).toFixed(2)} realized · Sharpe ${q.sharpe ?? '—'} · maxDD $${(q.max_dd_cents/100).toFixed(2)} · open risk $${(q.open_risk_cents/100).toFixed(2)}`;
-    document.querySelector('#rel tbody').innerHTML = e.reliability.map(r =>
-      `<tr><td>${r.range}</td><td>${r.n}</td><td>${r.mean_p}</td>
-       <td>${(r.hit_rate*100).toFixed(1)}% [${(r.ci95[0]*100).toFixed(0)}–${(r.ci95[1]*100).toFixed(0)}]</td></tr>`).join('')
-      || '<tr><td colspan="4">No settled stamped trades yet</td></tr>';
-  } catch(err){ /* eval optional */ }
+    sparkline($("equitySpark"), q.points.map((p) => ({ y: p.equity / 100 })));
+    $("equityLine").textContent = `Realized ${fmtC(q.total_cents)} · Sharpe ${q.sharpe ?? "—"} · max drawdown ${fmtC(q.max_dd_cents)} · open risk ${fmtC(q.open_risk_cents)}`;
+    document.querySelector("#rel tbody").innerHTML = e.reliability.map((r) =>
+      `<tr><td>${esc(r.range)}</td><td class="num">${r.n}</td><td class="num">${r.mean_p}</td>
+       <td class="num">${pct(r.hit_rate)} <span class="note">[${pct(r.ci95[0], 0)}–${pct(r.ci95[1], 0)}]</span></td></tr>`).join("")
+      || `<tr><td colspan="4" class="empty">No settled stamped trades yet.</td></tr>`;
+  } catch { /* eval optional */ }
 }
 
-async function loadTrades(){
-  const t = await jget('/api/trades?limit=50');
-  document.querySelector('#trades tbody').innerHTML = t.trades.map(r =>
-    `<tr><td>${r.id}</td><td style="font-size:12px">${r.market_ticker}</td><td>${r.side}</td><td>${r.contracts}</td>
-     <td>${r.price_paid_cents}</td><td>${r.edge ?? '—'}</td>
-     <td><span class="pill ${r.status}">${r.status}${r.result? ' ('+r.result+')':''}</span></td>
-     <td class="${r.pnl_cents==null?'':(r.pnl_cents>=0?'pos':'neg')}">${r.pnl_cents ?? '—'}</td></tr>`
-  ).join('') || '<tr><td colspan="8">No paper trades yet — buy a bracket above.</td></tr>';
+async function loadTrades() {
+  try {
+    const t = await jget("/api/trades?limit=50");
+    document.querySelector("#trades tbody").innerHTML = t.trades.map((r) =>
+      `<tr><td class="num">${r.id}</td><td style="font-size:12px">${esc(r.market_ticker)}</td><td>${esc(r.side)}</td><td class="num">${r.contracts}</td>
+       <td class="num">${r.price_paid_cents}</td><td class="num">${r.edge ?? "—"}</td><td class="hide-sm" style="font-size:11px">${esc(r.model_version || "")}</td>
+       <td><span class="pill ${esc(r.status)}">${esc(r.status)}${r.result ? ` (${esc(r.result)})` : ""}</span></td>
+       <td class="num ${r.pnl_cents == null ? "" : r.pnl_cents >= 0 ? "pos" : "neg"}">${r.pnl_cents == null ? "—" : fmtC(r.pnl_cents)}</td></tr>`
+    ).join("") || `<tr><td colspan="9" class="empty">No paper trades yet — buy from a market above or start the auto-trader.</td></tr>`;
+  } catch (e) { document.querySelector("#trades tbody").innerHTML = `<tr><td colspan="9" class="empty">Trades unavailable: ${esc(e.message)}</td></tr>`; }
 }
 
-async function resolve(){ await fetch('/api/resolve',{method:'POST'}); loadStats(); loadTrades(); }
-
-async function loadAuto(){
-  const s = await jget('/api/autotrade/status');
-  const c = s.config;
-  $('atInterval').value = c.interval_min; $('atThresh').value = c.threshold; $('atContracts').value = c.contracts;
-  if($('atConf')) $('atConf').value = c.min_confidence ?? 0.10;
-  $('atStatus').textContent = s.thread_running
-    ? `RUNNING every ${c.interval_min}m · edge≥${c.threshold} net · |P−.5|≥${c.min_confidence ?? 0.10} · x${c.contracts} · next in ${s.next_in_s ?? '?'}s`
-    : 'stopped';
-  $('atStart').disabled = s.thread_running;
-  const last = s.last ? `${s.last.action}${s.last.ticker ? ' '+s.last.ticker : ''}${s.last.reason ? ' ('+s.last.reason+')' : ''}` : '—';
-  document.querySelector('#cycles tbody').innerHTML =
-    `<tr><td colspan="5" style="text-align:left;color:var(--dim)">last cycle: ${last}</td></tr>` +
-    s.cycles.map(r => `<tr><td style="white-space:nowrap">${(r.ts||'').replace('T',' ').slice(0,19)}</td>
-      <td style="font-size:12px">${r.event_ticker||''}</td>
-      <td><span class="pill ${r.action==='buy'?'won':r.action==='error'?'lost':'open'}">${r.action}</span></td>
-      <td style="text-align:left;font-size:12px">${r.detail||''}</td>
-      <td>${r.spot!=null ? fmt$(r.spot)+' → '+fmt$(r.pred_price) : '—'}</td></tr>`).join('');
+/* ---------- trader ---------- */
+async function loadAuto() {
+  try {
+    const s = await jget("/api/autotrade/status");
+    const c = s.config;
+    $("atInterval").value = c.interval_min; $("atThresh").value = c.threshold;
+    $("atContracts").value = c.contracts; $("atConf").value = c.min_confidence ?? 0.10;
+    $("atStatus").textContent = s.thread_running
+      ? `RUNNING every ${c.interval_min}m · edge≥${c.threshold} · |P−.5|≥${c.min_confidence ?? 0.10} · cap x${c.contracts} · next in ${s.next_in_s ?? "?"}s`
+      : "Stopped — start it to paper-trade automatically.";
+    $("atStart").disabled = !!s.thread_running;
+    const rows = (s.cycles || []).filter((r) => cycleFilter === "all" || r.action === cycleFilter);
+    const last = s.last ? `${s.last.action}${s.last.ticker ? " " + s.last.ticker : ""}${s.last.reason ? ` (${s.last.reason})` : ""}` : "—";
+    document.querySelector("#cycles tbody").innerHTML =
+      `<tr><td colspan="5" style="text-align:left;color:var(--dim)">Last cycle: ${esc(last)}</td></tr>` +
+      (rows.map((r) => `<tr><td style="white-space:nowrap">${esc((r.ts || "").replace("T", " ").slice(5, 16))}</td>
+        <td style="font-size:12px">${esc(r.event_ticker || "")}</td>
+        <td><span class="pill ${r.action === "buy" ? "buy" : r.action === "error" ? "error" : "skip"}">${esc(r.action)}</span></td>
+        <td style="text-align:left;font-size:12px">${esc(r.detail || "")}</td>
+        <td class="hide-sm num">${r.spot != null ? fmt$(r.spot, 0) + " → " + fmt$(r.pred_price, 0) : "—"}</td></tr>`).join("")
+      || `<tr><td colspan="5" class="empty">No cycles logged yet.</td></tr>`);
+    return s;
+  } catch (e) { $("atStatus").textContent = "status unavailable: " + e.message; return null; }
 }
 
-async function autoStart(){
-  const r = await fetch('/api/autotrade/start',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({interval_min:+$('atInterval').value, threshold:+$('atThresh').value, contracts:+$('atContracts').value,
-      min_confidence:+($('atConf') ? $('atConf').value : 0.10)})});
-  if(!r.ok){ alert('start failed: ' + await r.text()); return; }
-  loadAuto();
-}
-async function autoStop(){ await fetch('/api/autotrade/stop',{method:'POST'}); loadAuto(); }
-async function autoCycle(){ await fetch('/api/autotrade/cycle',{method:'POST'}); loadAuto(); loadStats(); loadTrades(); }
+async function boot() {
+  $("btRun").onclick = async () => {
+    $("btRun").disabled = true;
+    try {
+      await api("/api/backtest15", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ n_events: +$("btN").value, asset: $("btAsset").value }) });
+    } catch (e) { toast("Backtest failed to start: " + e.message, "err"); $("btRun").disabled = false; return; }
+    const iv = setInterval(async () => {
+      let s;
+      try { s = await jget("/api/backtest/status"); }
+      catch (e) { clearInterval(iv); $("btRun").disabled = false; return; }
+      $("btStatus").textContent = s.state === "running" ? `running ${s.done || 0}/${s.total || $("btN").value}…` : s.state;
+      if (s.state !== "running") {
+        clearInterval(iv); $("btRun").disabled = false; loadStats();
+        if (s.state === "done" && s.result) {
+          const r = s.result;
+          $("btStatus").textContent = `done: ${r.traded} traded, ${(r.hit_rate * 100).toFixed(1)}% hits`;
+          toast(`Backtest done: ${r.traded} trades @ ${(r.hit_rate * 100).toFixed(1)}%`, "ok");
+        }
+        if (s.state === "error") { $("btStatus").textContent = "error: " + s.error; toast("Backtest error: " + s.error, "err"); }
+      }
+    }, 3000);
+  };
+  document.querySelectorAll("#cycleFilters .chip").forEach((ch) => ch.onclick = () => {
+    document.querySelectorAll("#cycleFilters .chip").forEach((c) => c.setAttribute("aria-pressed", "false"));
+    ch.setAttribute("aria-pressed", "true");
+    cycleFilter = ch.dataset.f; loadAuto();
+  });
+  $("resolveBtn").onclick = async () => { await api("/api/resolve", { method: "POST" }); toast("Open trades re-checked against Kalshi results.", "ok"); loadStats(); loadTrades(); };
+  $("atStart").onclick = async () => {
+    const ok = await confirmDlg({ title: "Start auto paper-trader?",
+      body: `Every ${$("atInterval").value} min it may place paper trades (no real money) at edge ≥ ${$("atThresh").value}, conviction ≥ ${$("atConf").value}.`,
+      okLabel: "Start" });
+    if (!ok) return;
+    try {
+      await api("/api/autotrade/start", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interval_min: +$("atInterval").value, threshold: +$("atThresh").value,
+          contracts: +$("atContracts").value, min_confidence: +$("atConf").value }) });
+      toast("Auto paper-trader started.", "ok"); loadAuto();
+    } catch (e) { toast("Start failed: " + e.message, "err"); }
+  };
+  $("atStop").onclick = async () => { await api("/api/autotrade/stop", { method: "POST" }); toast("Auto paper-trader stopped."); loadAuto(); };
+  $("atCycle").onclick = async () => { toast("Running one cycle…"); await api("/api/autotrade/cycle", { method: "POST" }); loadAuto(); loadStats(); loadTrades(); };
+  $("pauseBtn").onclick = () => {
+    Poller.paused = !Poller.paused;
+    $("pauseBtn").textContent = Poller.paused ? "Resume" : "Pause";
+    toast(Poller.paused ? "Auto-refresh paused." : "Auto-refresh resumed.");
+  };
 
-async function runBacktest(){
-  const n = $('btN').value, lead = $('btLead').value;
-  $('btRun').disabled = true;
-  await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({n_events:+n, lead_min:+lead})});
-  const iv = setInterval(async () => {
-    const s = await jget('/api/backtest/status');
-    $('btStatus').textContent = s.state === 'running' ? `running ${s.done||0}/${s.total||n}…` : s.state;
-    if(s.state !== 'running'){ clearInterval(iv); $('btRun').disabled = false; loadStats();
-      if(s.state==='done') $('btStatus').textContent = `done: hit-rate ${(s.result.hit_rate*100).toFixed(1)}% over ${s.result.n} events`;
-      if(s.state==='error') $('btStatus').textContent = 'error: ' + s.error;
-    }
-  }, 3000);
-}
+  Poller.add(async () => {
+    const h = await api("/api/health").catch(() => null);
+    if (h) { renderTop(h); etClock($("clock")); }
+  }, 30000);
+  Poller.add(async () => {
+    const [ov, auto] = await Promise.all([
+      api("/api/overview").catch((e) => { throw e; }),
+      api("/api/autotrade/status").catch(() => ({ config: {}, thread_running: false })),
+    ]).catch((e) => { $("overview").innerHTML = `<div class="card"><div class="s">Overview unavailable: ${esc(e.message)}</div></div>`; return [null, null]; });
+    if (!ov) return;
+    renderOverview(ov);
+    const h = lastHealth || {};
+    renderHero(h, ov, auto || {});
+  }, 30000);
+  Poller.add(async () => { loadStats(); }, 30000);
+  Poller.add(async () => { loadTrades(); loadAuto(); }, 30000);
 
-loadOverview(); loadMarkets(); loadStats(); loadTrades(); loadAuto();
-setInterval(() => { loadOverview(); loadMarkets(); loadStats(); loadTrades(); loadAuto(); }, 30000);
+  // countdown ticker
+  let remain = 30;
+  setInterval(() => {
+    etClock($("clock"));
+    if (!Poller.paused && !document.hidden) {
+      remain = remain <= 1 ? 30 : remain - 1;
+      $("countdown").textContent = `refresh ${remain}s`;
+    } else $("countdown").textContent = "paused";
+  }, 1000);
+  Poller.start();
+  const y = new Date().getUTCFullYear();
+  $("foot").textContent = `BitBot paper system · no real orders · model versions tracked per trade · ${y}`;
+}
+document.addEventListener("DOMContentLoaded", boot);
 </script>
 </body>
 </html>

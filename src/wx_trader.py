@@ -108,7 +108,14 @@ def _eval_city_date(city: str, target, cfg: dict) -> dict:
         return {"action": "skip", "reason": "no_event", **base}
     brackets = [_parse(m) for m in ev.get("markets", []) if m.get("status") == "active"]
     if not brackets:
-        log_cycle("skip", f"{event} has no active brackets", city=city, event=event)
+        from collections import Counter as _C
+        stat = dict(_C(m.get("status", "?") for m in ev.get("markets", [])))
+        n = len(ev.get("markets", []))
+        if n and set(stat) <= {"initialized"}:
+            detail = f"{event}: {n} brackets listed but not open yet {stat} — Kalshi activates them closer to the day; retry next cycle"
+        else:
+            detail = f"{event}: no active brackets (found {stat or 'no markets'})"
+        log_cycle("skip", detail, city=city, event=event)
         return {"action": "skip", "reason": "not_active", **base}
     try:
         pred, fairs = city_probs(city, target, brackets)
