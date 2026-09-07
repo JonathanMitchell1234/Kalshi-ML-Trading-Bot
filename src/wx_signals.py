@@ -12,6 +12,7 @@ import json
 import numpy as np
 import pandas as pd
 import joblib
+import requests
 
 from wx_data import load_obs, fetch_forecast_snapshot, fetch_ensemble_snapshot, CITIES, DATA_DIR
 from wx_features import build_frame
@@ -34,6 +35,7 @@ def load_wx(city: str):
         bt.n = cal.get("n", 0)
         _wx[city] = {"gbm": joblib.load(MODEL_DIR / f"wx_{c}_gbm.pkl"),
                      "feats": joblib.load(MODEL_DIR / f"wx_{c}_feats.pkl"),
+                     "target_mode": cal.get("target_mode", "absolute"),
                      "cal": bt, "kind": cal.get("kind", "bayes-t")}
     return _wx[city]
 
@@ -100,6 +102,19 @@ def gfs_for_target(city: str, target, do_log: bool = True) -> tuple[float | None
         pass
     entry = {"ts": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds"), "city": city,
              "target": tstr, "gfs_max": gfs, "ens_mean": ens_mean, "ens_std": ens_std}
+    try:  # second opinion: ECMWF IFS daily max (multi-model future blending)
+        from wx_data import CITIES as _CCe
+        _c = _CCe[city]
+        _e = requests.get("https://api.open-meteo.com/v1/forecast",
+                          params={"latitude": _c["lat"], "longitude": _c["lon"],
+                                  "daily": "temperature_2m_max", "timezone": _c["tz"],
+                                  "temperature_unit": "fahrenheit", "forecast_days": 3,
+                                  "models": "ecmwf_ifs"}, timeout=20).json()
+        _dd = _e.get("daily", {})
+        _idx = list(pd.to_datetime(_dd.get("time", [])).strftime("%Y-%m-%d")).index(tstr)
+        entry["ecmwf_max"] = float(_dd["temperature_2m_max"][_idx])
+    except Exception:
+        pass
     if do_log:
         lp = DATA_DIR / "wx_gfs_log.csv"
         pd.DataFrame([entry]).to_csv(lp, mode="a", header=not lp.exists(), index=False)
@@ -111,6 +126,35 @@ def _stub_row(prev: pd.Series, tmax_est: float | None) -> dict:
     d["date"] = prev["date"] + pd.Timedelta(days=1)
     d["tmax"] = tmax_est if tmax_est is not None else prev["tmax"]
     return d
+
+
+def _dpd_hist_full(city: str):
+    try:
+        from wx_features import station_dpd_daily
+        return station_dpd_daily(city)
+    except Exception:
+        return None
+
+
+def _wind_hist_full(city: str):
+    try:
+        from wx_features import daily_wind
+        return daily_wind(pd.read_csv(DATA_DIR / f"wx_{city.lower()}_wind.csv", parse_dates=["time"]))
+    except Exception:
+        return None
+
+
+def live_dpd_rows(city: str) -> pd.DataFrame:
+    """Recent daily dewpoint-depression rows from the GFS snapshot hours."""
+    from wx_features import daily_dpd
+    snap = fetch_forecast_snapshot(city)
+    h = snap.get("hourly", {})
+    df = pd.DataFrame({"time": pd.to_datetime(h.get("time", [])),
+                       "t2m": pd.to_numeric(pd.Series(h.get("temperature_2m", [])), errors="coerce"),
+                       "dw": pd.to_numeric(pd.Series(h.get("dew_point_2m", [])), errors="coerce")})
+    df["t2m"] = (df["t2m"] - 32) * 5 / 9 if df["t2m"].mean() > 45 else df["t2m"]
+    df["dw"] = (df["dw"] - 32) * 5 / 9 if df["dw"].mean() > 45 else df["dw"]
+    return daily_dpd(df.dropna(subset=["time"]))
 
 
 def live_upper_rows(city: str) -> pd.DataFrame:
@@ -273,8 +317,13 @@ def city_probs(city: str, target, brackets: list[dict], do_log: bool = True) -> 
         _wind_live = _dw2(_h2.dropna(subset=["time"]))
     except Exception:
         pass
+    try:
+        _dpd_live = live_dpd_rows(city)
+    except Exception:
+        _dpd_live = None
     df, _ = build_frame(feat_df, up_live, keep_all=True, snd_daily=_snd_live,
-                        lat_deg=_CC3[city]["lat"], sw_daily=_sw_live, wind_daily=_wind_live)
+                        lat_deg=_CC3[city]["lat"], sw_daily=_sw_live, wind_daily=_wind_live,
+                        dpd_daily=_dpd_live)
     row = df[df["date"] == target]
     if row.empty:
         row = df.iloc[[-1]]
@@ -290,7 +339,10 @@ def city_probs(city: str, target, brackets: list[dict], do_log: bool = True) -> 
                 t850_chg_disp = round(float(_r["t850s_chg24"].iloc[0]), 1)
         except Exception:
             pass
-    point = float(M["gbm"].predict(row[M["feats"]].values)[0])
+    _mode = "anomaly" if str(M.get("target_mode", "absolute")) == "anomaly" else "absolute"
+    point_raw = float(M["gbm"].predict(row[M["feats"]].values)[0])
+    _clim_t = float(row["clim"].iloc[0]) if "clim" in row.columns else 0.0
+    point = point_raw + (_clim_t if _mode == "anomaly" else 0.0)
     # physical validation guard: blend runaway leaves back toward NWP
     phys_blend = False
     _ref = ndfd if ndfd is not None else gfs
@@ -312,12 +364,13 @@ def city_probs(city: str, target, brackets: list[dict], do_log: bool = True) -> 
         except Exception:
             pass
     df_full, _ = build_frame(complete, up_hist, snd_daily=snd_hist,
-                             lat_deg=_CC3[city]["lat"], sw_daily=_sw_live)
+                             lat_deg=_CC3[city]["lat"], sw_daily=_sw_live,
+                             wind_daily=_wind_hist_full(city), dpd_daily=_dpd_hist_full(city))
     for _c in M["feats"]:
         if _c not in df_full.columns:
             df_full[_c] = np.nan
     _rrow = row.iloc[0].to_dict() if hasattr(row, "iloc") else row
-    cal, regime = trailing_cal_regime(M["gbm"], M["feats"], df_full, target, _rrow)
+    cal, regime = trailing_cal_regime(M["gbm"], M["feats"], df_full, target, _rrow, mode=_mode)
     cp0 = cal.params
     if _ref is not None and abs(point - _ref) > 3 * cp0["sigma"]:
         point = (point + _ref) / 2  # runaway leaf: fall back halfway to physics

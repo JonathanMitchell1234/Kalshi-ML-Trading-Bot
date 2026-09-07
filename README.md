@@ -61,14 +61,16 @@ python src/train_stack.py       # logistic stack + comparison
   200 live Kalshi windows each: **BTC 56.5% (69 trades), ETH 60.9% (23)**.
 - Lesson logged: an UP-framed hit metric once faked a crisis (down-heavy
   buckets read low); all conviction metrics are side-aware now.
-## Sizing + evaluation (institutional Phase 1)
+## Sizing + evaluation + risk (institutional Phase 1)
 - `src/sizing.py` — fractional Kelly on fee-net edge (tenth-Kelly default,
-  2% bankroll cap, 10-contract cap). Both traders size every paper fill;
-  `contracts` config is now the cap, not the size.
+  2% bankroll cap, 10-contract cap). Both traders size every paper fill.
 - `src/evaluate.py` + `/api/eval` + dashboard section — per-model-version
-  P&L, Wilson 95% CIs on all hit rates, equity/Sharpe/drawdown (realized),
-  live reliability of stored P vs realized. Current: 4/13 settled (31%,
-  CI 13–58%), +$0.74 — i.e., *not yet evidence of anything*.
+  P&L, Wilson 95% CIs, equity/Sharpe/drawdown, live reliability.
+- `src/risk.py` + `/api/risk` + `POST /api/halt-all` — daily-loss halt
+  (−$500, auto-expires at UTC midnight), 10-position / $100-trade caps,
+  calibration-drift halt (trailing-20 under 45% while implying ≥55%),
+  stale-data + error-streak breakers, paper-mode lock (`require_live()`),
+  one-button kill switch. `src/test_risk.py`: 20 checks, all passing.
 - `python src/retrain_all.py` (weekly cron): refreshes wx + direction models
   and stamps `versions.json`; every paper trade carries its model version.
 - Economics: edges and P&L are **net of the real Kalshi taker fee**
@@ -95,6 +97,14 @@ settled on The Weather Company. Pipeline:
   backtest 23%→25%, tendencies rank #3-5); CHI reverted (RMSE 7.02→7.33,
   KILX 200km offset — gate enforced per city). Serve: same-day 12Z obs or
   GFS-profile fallback (unit-checked, flagged); weather tab shows 850T.
+- **Anomaly targets** (NYC only): predict T−clim, add back; RMSE 5.88→5.62,
+  backtest 20%→25%, PIT uniform (KS p=0.17), CRPS 2.5. CHI tied → stays absolute.
+- **2m dewpoint depression** (station history + live): NYC RMSE →5.79,
+  CRPS →2.45, PIT KS 0.26. ECMWF IFS logged alongside GFS for future blending.
+- **Diagnostics**: mean CRPS + PIT uniformity on every backtest; conformal
+  intervals evaluated (kept BayesT); purge/embargo + blackout discipline on splits.
+- **Calibration window 45d** (not 120d): fixes CHI PIT uniformity (KS p 0.008→0.13),
+  CRPS 2.41→2.26 CHI / 2.45→2.39 NYC. Short windows track seasonal volatility.
 - **Pooled multi-city challenger**: one GBM on NYC+CHI (city one-hot) wins
   test RMSE (5.82/6.94 vs 6.23/7.19) but NOT bracket backtests
   (18%/10% vs 20%/10%) — stays an experiment, per-city models serve.

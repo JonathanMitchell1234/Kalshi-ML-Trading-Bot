@@ -160,6 +160,11 @@ def _eval_city_date(city: str, target, cfg: dict) -> dict:
     sizing = size_contracts(fair, all_in_ask_cents(b["yes_ask"]),
                                 max_contracts=cfg["contracts"])
     n = sizing["contracts"] or 1
+    import risk as R
+    halt, reason = R.check_exposure(T.day_pnl()["n_open"], n * (b["yes_ask"] or 0))
+    if halt:
+        log_cycle("skip", f"{city}: exposure cap: {reason}", **base)
+        return {"action": "skip", "reason": "exposure_cap", **base}
     tid = T.record_paper_trade(
         event_ticker=event, market_ticker=b["ticker"], side="yes",
         contracts=n, price_paid_cents=b["yes_ask"],
@@ -195,6 +200,29 @@ def open_targets() -> list[tuple[str, object]]:
 def run_cycle(cfg: dict | None = None) -> dict:
     cfg = cfg or get_config()
     T.resolve_open_trades()
+    import risk as R
+    dp = T.day_pnl()
+    halt, reason = R.check_daily_halt(dp["total_cents"])
+    if halt:
+        T.trip_halt("all", reason)
+        set_config(enabled=0)
+        log_cycle("halt", reason)
+        return {"action": "halt", "reason": reason, "results": []}
+    tp = T.trailing_perf(R.DRIFT_N, "wx")
+    halt, reason = R.check_drift(tp["wins"], tp["n"], tp["mean_implied"])
+    if halt:
+        T.trip_halt("wx", reason)
+        set_config(enabled=0)
+        log_cycle("halt", reason)
+        return {"action": "halt", "reason": reason, "results": []}
+    with _db() as c:
+        errs = [r[0] for r in c.execute("SELECT action FROM wx_cycles ORDER BY id DESC LIMIT 3")]
+    if len(errs) >= 3 and all(a == "error" for a in errs):
+        reason = "3 consecutive cycle errors"
+        T.trip_halt("wx", reason)
+        set_config(enabled=0)
+        log_cycle("halt", reason)
+        return {"action": "halt", "reason": reason, "results": []}
     results = []
     for city, target in open_targets():
         try:

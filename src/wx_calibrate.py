@@ -87,15 +87,25 @@ def regime_of(row: dict | pd.Series) -> str:
     return "frontal" if (chg >= 4.0 or dpd >= 8.0) else "calm"
 
 
+def _target_vals(frame: pd.DataFrame, mode: str) -> pd.Series:
+    if mode == "anomaly" and "clim" in frame.columns:
+        return frame["tmax"] - frame["clim"]
+    return frame["tmax"]
+
+
 def trailing_cal_regime(gbm, feats: list[str], frame: pd.DataFrame, asof,
-                        row: dict | pd.Series, window_days: int = 120,
+                        row: dict | pd.Series, window_days: int | None = None,
                         floor: str = "2025-01-01",
-                        pred_override: pd.Series | None = None) -> tuple["BayesT", str]:
+                        pred_override: pd.Series | None = None,
+                        mode: str = "absolute") -> tuple["BayesT", str]:
     """Regime-conditional calibration: separate residual posterior for the
     target day's regime (frontal days get their own wide sigma instead of
     polluting calm-day precision). Falls back to pooled when thin.
     pred_override: precomputed predictions aligned to frame (pooled models).
     """
+    import os as _os
+    if window_days is None:
+        window_days = int(_os.getenv("WX_CAL_WINDOW", "45"))
     reg = regime_of(row)
     asof = pd.Timestamp(asof).tz_localize(None)
     hist = frame[(frame["date"] >= asof - pd.Timedelta(days=window_days)) &
@@ -107,7 +117,8 @@ def trailing_cal_regime(gbm, feats: list[str], frame: pd.DataFrame, asof,
         pred = pred_override.loc[hist.index].values
     else:
         pred = gbm.predict(hist[feats].values)
-    hist = hist.assign(_res=hist["tmax"].values - pred, _reg=hist.apply(regime_of, axis=1))
+    hist = hist.assign(_res=_target_vals(hist, mode).values - pred,
+                       _reg=hist.apply(regime_of, axis=1))
     sub = hist[hist["_reg"] == reg]
     if len(sub) < 12:  # thin regime -> pooled (honest fallback)
         return BayesT().update(hist["_res"].values), reg + "+pooled"

@@ -60,15 +60,26 @@ def frame_city(city: str, use_snd: bool | None = None):
         from wx_data import CITIES as _C
         snd = daily_diag(pd.read_csv(sp, parse_dates=["time"]), _C[city]["tz"])
     from wx_data import CITIES as _CC2
+    from wx_features import station_dpd_daily as _sdd
+    try:
+        _dpd = _sdd(city)
+    except Exception:
+        _dpd = None
     return build_frame(obs, daily_upper(up), snd_daily=snd,
-                       lat_deg=_CC2[city]["lat"], sw_daily=_sw, wind_daily=_wind)
+                       lat_deg=_CC2[city]["lat"], sw_daily=_sw, wind_daily=_wind,
+                       dpd_daily=_dpd)
 
 
 def main(city: str = "NYC"):
     df, feats = frame_city(city)
     print(f"{city}: {len(df)} rows {df['date'].min().date()} -> {df['date'].max().date()}")
-    X, y = df[feats].values, df["tmax"].values
+    _anom_raw = __import__("os").getenv("WX_ANOMALY", "0")
+    _anom = _anom_raw in ("1", "save")
+    _save_ok = _anom_raw != "1"
+    _ytarget = (df["tmax"] - df["clim"]).values if _anom else df["tmax"].values
+    X, y = df[feats].values, _ytarget
     tr, ca, te = wx_splits(df["date"])
+    print(f"target={'anomaly' if _anom else 'absolute'}")
     print(f"train {tr.sum()} calib {ca.sum()} test {te.sum()} (purged+embargoed)")
 
     # Tail weighting (rain-event lesson): upweight extreme-anomaly days so the
@@ -95,7 +106,17 @@ def main(city: str = "NYC"):
     except Exception as e:
         print(f"xgb challenger failed ({e})")
         xgb, pred_xgb, rmse_xgb = None, None, float("inf")
-    rmse_lgbm = float(np.sqrt(np.mean((y[te] - pred_lgbm[te]) ** 2)))
+    rmse_lgbm = None  # computed in absolute space below (after addback)
+    use_xgb = False
+    pred = pred_lgbm
+    booster_kind = "tbd"
+    # all point metrics in ABSOLUTE degrees (add clim back in anomaly mode)
+    _addback = (df["clim"].values if _anom else 0.0)
+    _pred_abs = pred + _addback
+    _y_abs = y + _addback
+    rmse_lgbm = float(np.sqrt(np.mean((_y_abs[te] - (pred_lgbm + _addback)[te]) ** 2)))
+    if pred_xgb is not None:
+        rmse_xgb = float(np.sqrt(np.mean((_y_abs[te] - (pred_xgb + _addback)[te]) ** 2)))
     use_xgb = rmse_xgb < rmse_lgbm
     pred = pred_xgb if use_xgb else pred_lgbm
     booster_kind = "xgboost" if use_xgb else "lightgbm"
@@ -117,29 +138,36 @@ def main(city: str = "NYC"):
     b_bayes = float(brier_score_loss(yt, np.clip(pb, 1e-6, 1 - 1e-6)))
     b_gauss = float(brier_score_loss(yt, np.clip(pg, 1e-6, 1 - 1e-6)))
     winner = "bayes-t" if b_bayes <= b_gauss else "empirical-gaussian"
+    _addback = (df["clim"].values if _anom else 0.0)
+    _pred_abs = pred + _addback
+    _y_abs = y + _addback
     out = {
         "city": city, "n_test": int(te.sum()), "booster": booster_kind,
-        "rmse": round(float(np.sqrt(np.mean((y[te] - pred[te]) ** 2))), 3),
-        "mae": round(float(mean_absolute_error(y[te], pred[te])), 3),
-        "bias_test": round(float(np.mean(pred[te] - y[te])), 3),
+        "anomaly_target": bool(_anom),
+        "rmse": round(float(np.sqrt(np.mean((_y_abs[te] - _pred_abs[te]) ** 2))), 3),
+        "mae": round(float(mean_absolute_error(_y_abs[te], _pred_abs[te])), 3),
+        "bias_test": round(float(np.mean(_pred_abs[te] - _y_abs[te])), 3),
         "brier_bayes": round(b_bayes, 4),
         "brier_gauss": round(b_gauss, 4),
         "brier_clim": round(float(brier_score_loss(yt, [yt.mean()] * len(yt))), 4),
         "winner": winner,
         "bayes_params": bayes.params,
         "gauss_params": {"bias": g_bias, "sigma": g_std},
-        "test_start": str(d[te].min().date()),
+        "test_start": str(df["date"][te].min().date()),
     }
     print(json.dumps(out, indent=1))
-    joblib.dump(xgb if use_xgb else gbm, MODEL_DIR / f"wx_{city.lower()}_gbm.pkl")
-    joblib.dump(feats, MODEL_DIR / f"wx_{city.lower()}_feats.pkl")
-    cal = {"kind": winner,
-           **(bayes.params if winner == "bayes-t" else {"bias": g_bias, "sigma": g_std})}
-    json.dump(cal, open(MODEL_DIR / f"wx_{city.lower()}_cal.json", "w"), indent=1)
-    mp = MODEL_DIR / "wx_metrics.json"
-    allm = json.loads(mp.read_text()) if mp.exists() else {}
-    allm[city] = out
-    mp.write_text(json.dumps(allm, indent=1))
+    if _anom and not _save_ok:
+        print("anomaly mode: evaluation only, production artifacts untouched")
+    else:
+        joblib.dump(xgb if use_xgb else gbm, MODEL_DIR / f"wx_{city.lower()}_gbm.pkl")
+        joblib.dump(feats, MODEL_DIR / f"wx_{city.lower()}_feats.pkl")
+        cal = {"kind": winner, "target_mode": "anomaly" if _anom else "absolute",
+               **(bayes.params if winner == "bayes-t" else {"bias": g_bias, "sigma": g_std})}
+        json.dump(cal, open(MODEL_DIR / f"wx_{city.lower()}_cal.json", "w"), indent=1)
+        mp = MODEL_DIR / "wx_metrics.json"
+        allm = json.loads(mp.read_text()) if mp.exists() else {}
+        allm[city] = out
+        mp.write_text(json.dumps(allm, indent=1))
     _booster = xgb if use_xgb else gbm
     try:
         _fi = _booster.feature_importances_
@@ -148,8 +176,9 @@ def main(city: str = "NYC"):
     imp = pd.DataFrame({"feature": feats, "importance": _fi}
                        ).sort_values("importance", ascending=False)
     print(imp.head(10).to_string(index=False))
-    from tracker import stamp
-    print(f"version wx_{city}=" + stamp(f"wx_{city}"))
+    if not _anom:
+        from tracker import stamp
+        print(f"version wx_{city}=" + stamp(f"wx_{city}"))
     return out
 
 

@@ -153,6 +153,27 @@ def run_cycle(cfg: dict | None = None) -> dict:
     results: list[dict] = []
     try:
         T.resolve_open_trades()
+        import risk as R
+        dp = T.day_pnl()
+        halt, reason = R.check_daily_halt(dp["total_cents"])
+        if halt:
+            T.trip_halt("all", reason)
+            set_config(enabled=0)
+            log_cycle("halt", reason)
+            return {"action": "halt", "reason": reason, "results": results}
+        tp = T.trailing_perf(R.DRIFT_N, "crypto")
+        halt, reason = R.check_drift(tp["wins"], tp["n"], tp["mean_implied"])
+        if halt:
+            T.trip_halt("crypto", reason)
+            set_config(enabled=0)
+            log_cycle("halt", reason)
+            return {"action": "halt", "reason": reason, "results": results}
+        if _error_streak(3):
+            reason = "3 consecutive cycle errors"
+            T.trip_halt("crypto", reason)
+            set_config(enabled=0)
+            log_cycle("halt", reason)
+            return {"action": "halt", "reason": reason, "results": results}
         try:
             from fetch_data import refresh_all
             refresh_all()  # force-fresh bars so p is for the just-closed candle
@@ -187,6 +208,18 @@ def _eval_asset(asset: str, cfg: dict, conf: float, max_in: float) -> dict:
     except Exception as e:
         log_cycle("error", f"{event}: {e}", **{**base, "event": event})
         return {"asset": asset, "action": "error", "reason": str(e)[:100], **{**base, "event": event}}
+    # stale-signal breaker: bars older than 30m invalidate the decision
+    try:
+        from datetime import datetime, timezone as _tz
+        asof = pred.get("asof")
+        age = (datetime.now(_tz.utc) - datetime.fromisoformat(str(asof))).total_seconds() / 60 if asof else None
+    except Exception:
+        age = None
+    import risk as R
+    halt, reason = R.check_fresh(age)
+    if halt:
+        log_cycle("skip", f"{asset}: {reason}", **{**base, "event": event})
+        return {"asset": asset, "action": "skip", "reason": "stale_data", **{**base, "event": event}}
     mins_left = S.minutes_to_close(m["close_time"]) or 0.0
     mins_in = round(15 - mins_left, 1)
     base = dict(event=event, spot=pred.get("spot"), pred=pred.get("pred_price"), mins=round(mins_left, 1))
@@ -214,17 +247,34 @@ def _eval_asset(asset: str, cfg: dict, conf: float, max_in: float) -> dict:
         log_cycle("skip", f"{asset} p_up={p_stack:.3f} but no fee-aware edge ≥ {cfg['threshold']}", **base)
         return {"asset": asset, "action": "skip", "reason": "below_threshold", "p_stack": p_stack, **base}
 
+    from economics import all_in_ask_cents
+    fair_p = pick["fair"] if pick["side"] == "yes" else 1 - pick["fair"]
+    sizing = size_contracts(fair_p, all_in_ask_cents(pick["paid"]),
+                            max_contracts=cfg["contracts"])
+    n = sizing["contracts"] or 1
+    halt, reason = R.check_exposure(T.day_pnl()["n_open"], n * pick["paid"])
+    if halt:
+        log_cycle("skip", f"{asset}: exposure cap: {reason}", **base)
+        return {"asset": asset, "action": "skip", "reason": "exposure_cap", **base}
     tid = T.record_paper_trade(
         event_ticker=event, market_ticker=m["ticker"], side=pick["side"],
-        contracts=cfg["contracts"], price_paid_cents=pick["paid"],
+        contracts=n, price_paid_cents=pick["paid"],
         pred_price=pred.get("pred_price"), spot=pred.get("spot"), p_up=p_stack,
         edge=pick["edge"], minutes_to_expiry=round(mins_left, 1),
         model_version=T.model_version(f"dir_{asset}"))
-    detail = (f"{asset} p_up={p_stack:.3f} target={m['target']} | {pick['side'].upper()} {m['ticker']} "
-              f"x{cfg['contracts']} @ {pick['paid']}¢ fair={pick['fair']} edge_net={pick['edge']}")
+    detail = (f"{asset} p_up={p_stack:.3f} | {pick['side'].upper()} {m['ticker']} "
+              f"x{n} @ {pick['paid']}¢ fair={pick['fair']} edge_net={pick['edge']} "
+              f"kelly={sizing['kelly_f']}")
     log_cycle("buy", detail, trade_id=tid, **base)
     return {"asset": asset, "action": "buy", "trade_id": tid, "ticker": m["ticker"], **pick,
-            "p_stack": p_stack, **base}
+            "p_stack": p_stack, "contracts": n, **base}
+
+
+def _error_streak(k: int = 3) -> bool:
+    with _db() as c:
+        rows = [r[0] for r in c.execute(
+            "SELECT action FROM auto_cycles ORDER BY id DESC LIMIT ?", (k,))]
+    return len(rows) >= k and all(a == "error" for a in rows)
 
 
 def recent_cycles(limit: int = 50) -> list[dict]:

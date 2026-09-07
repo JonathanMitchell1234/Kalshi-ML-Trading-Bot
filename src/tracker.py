@@ -56,6 +56,111 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+RISK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS risk_halts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL, scope TEXT NOT NULL, reason TEXT NOT NULL,
+  day TEXT NOT NULL, auto INTEGER NOT NULL DEFAULT 1, cleared INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+def _risk_conn():
+    import sqlite3
+    c = sqlite3.connect(DB_PATH)
+    c.row_factory = sqlite3.Row
+    c.executescript(RISK_SCHEMA)
+    return c
+
+
+def day_pnl(day: str | None = None) -> dict:
+    """Today's realized P&L + open risk (conservative total for the halt line)."""
+    from datetime import datetime, timezone as _tz
+    day = day or datetime.now(_tz.utc).strftime("%Y-%m-%d")
+    with conn() as c:
+        rows = [dict(r) for r in c.execute("SELECT status, pnl_cents, cost_cents, settled_at, created_at FROM paper_trades")]
+    real = sum(r["pnl_cents"] or 0 for r in rows
+               if r["status"] in ("won", "lost") and str(r["settled_at"] or "")[:10] == day)
+    open_risk = sum(r["cost_cents"] or 0 for r in rows if r["status"] == "open")
+    n_open = sum(1 for r in rows if r["status"] == "open")
+    return {"day": day, "realized_cents": real, "open_risk_cents": open_risk,
+            "total_cents": real - open_risk, "n_open": n_open}
+
+
+def trailing_perf(n: int = 20, scope: str | None = None) -> dict:
+    """Trailing settled trades: win rate vs mean model-implied P (side-aware).
+
+    scope 'crypto' = KXBTC/KXETH events, 'wx' = KXHIGH events, None = all.
+    """
+    with conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT event_ticker, status, p_up, side FROM paper_trades WHERE status IN ('won','lost') ORDER BY id DESC LIMIT ?", (n * 3,))]
+    if scope == "crypto":
+        rows = [r for r in rows if (r["event_ticker"] or "").startswith(("KXBTC", "KXETH"))]
+    elif scope == "wx":
+        rows = [r for r in rows if (r["event_ticker"] or "").startswith("KXHIGH")]
+    rows = rows[:n]
+    rows = [r for r in rows if r["p_up"] is not None]
+    if not rows:
+        return {"n": 0, "wins": 0, "win_rate": None, "mean_implied": None}
+    wins = 0
+    implied = []
+    for r in rows:
+        p = float(r["p_up"])
+        fair = p if (r["side"] or "yes") == "yes" else 1 - p
+        implied.append(fair)
+        if r["status"] == "won":
+            wins += 1
+    return {"n": len(rows), "wins": wins, "win_rate": round(wins / len(rows), 4),
+            "mean_implied": round(sum(implied) / len(implied), 4)}
+
+
+def trip_halt(scope: str, reason: str, day: str | None = None):
+    from datetime import datetime, timezone as _tz
+    day = day or datetime.now(_tz.utc).strftime("%Y-%m-%d")
+    with _risk_conn() as c:
+        c.execute("INSERT INTO risk_halts(ts,scope,reason,day,auto) VALUES(?,?,?,?,1)",
+                  (now_iso(), scope, reason, day))
+    # flip the traders' own switches off (existing UI keeps working)
+    import sqlite3
+    with sqlite3.connect(DB_PATH) as c2:
+        if scope in ("crypto", "all"):
+            try:
+                c2.execute("CREATE TABLE IF NOT EXISTS auto_config(id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0)")
+                c2.execute("INSERT INTO auto_config(id,enabled) VALUES(1,0) ON CONFLICT(id) DO UPDATE SET enabled=0")
+            except Exception:
+                pass
+        if scope in ("wx", "all"):
+            try:
+                c2.execute("CREATE TABLE IF NOT EXISTS wx_config(id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0)")
+                c2.execute("INSERT INTO wx_config(id,enabled) VALUES(1,0) ON CONFLICT(id) DO UPDATE SET enabled=0")
+            except Exception:
+                pass
+
+
+def halt_state() -> list[dict]:
+    """Active halts: unclear, with daily-loss halts auto-expiring at UTC midnight."""
+    from datetime import datetime, timezone as _tz
+    today = datetime.now(_tz.utc).strftime("%Y-%m-%d")
+    with _risk_conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT * FROM risk_halts WHERE cleared=0 ORDER BY id DESC")]
+    out = []
+    for r in rows:
+        if r["reason"].startswith("daily loss") and r["day"] != today:
+            continue  # expired at midnight; trader stays off until manual restart
+        out.append(r)
+    return out
+
+
+def clear_halts(scope: str | None = None):
+    with _risk_conn() as c:
+        if scope:
+            c.execute("UPDATE risk_halts SET cleared=1 WHERE scope=? AND cleared=0", (scope,))
+        else:
+            c.execute("UPDATE risk_halts SET cleared=1 WHERE cleared=0")
+
+
 # ------------------------------------------------------------ paper trades
 def record_paper_trade(event_ticker: str, market_ticker: str, side: str, contracts: int,
                        price_paid_cents: int, pred_price: float | None = None,

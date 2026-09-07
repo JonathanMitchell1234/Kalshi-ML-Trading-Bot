@@ -9,6 +9,7 @@
 <body>
 <header class="topbar">
   <span class="brand">BitBot</span>
+  <span class="modebadge" id="modeBadge" title="Trading mode">PAPER</span>
   <nav><a href="/" aria-current="page">Crypto</a><a href="/weather">Weather</a></nav>
   <span class="spacer"></span>
   <span id="clock" title="Eastern time"></span>
@@ -16,6 +17,8 @@
   <button class="ghost" id="pauseBtn" title="Pause auto-refresh">Pause</button>
   <span id="countdown" class="num" title="Next refresh"></span>
 </header>
+
+<div id="haltBanner"></div>
 
 <h1>Crypto <span class="sub">15-min BTC/ETH binaries · paper only, no real orders</span></h1>
 
@@ -36,6 +39,12 @@
   <div class="card twrap"><table id="updown"><thead><tr>
     <th>Market</th><th>Target</th><th>Side</th><th>Ask ¢</th><th>Model fair</th><th>Edge net</th><th>Closes</th><th></th>
   </tr></thead><tbody><tr><td colspan="8" class="empty">Loading…</td></tr></tbody></table></div>
+</section>
+
+<section>
+  <h2>Risk <span class="sub">daily halt · exposure caps · drift monitor</span><span class="spacer"></span>
+    <button class="danger-ghost" id="haltBtn">HALT ALL</button></h2>
+  <div class="grid" id="risk"></div>
 </section>
 
 <section>
@@ -245,6 +254,33 @@ async function loadStats() {
   } catch (e) { $("stats").innerHTML = `<div class="card"><div class="s">Stats unavailable: ${esc(e.message)}</div></div>`; }
 }
 
+async function loadRisk() {
+  let r;
+  try { r = await jget("/api/risk"); }
+  catch (e) { $("risk").innerHTML = `<div class="card"><div class="s">Risk unavailable: ${esc(e.message)}</div></div>`; return; }
+  $("modeBadge").textContent = r.mode || "PAPER";
+  const halts = r.halts || [];
+  $("haltBanner").innerHTML = halts.map((h) =>
+    `<div class="haltbanner" role="alert"><b>HALTED</b> (${esc(h.scope)}): ${esc(h.reason)} · ${esc(h.ts || "")}</div>`).join("");
+  const lim = r.limits, d = r.day;
+  const usePct = Math.min(100, Math.abs(d.total_cents) / lim.max_daily_loss_cents * 100);
+  const danger = d.total_cents <= 0 && usePct >= 75;
+  const dc = r.drift.crypto, dw = r.drift.wx;
+  const driftTxt = (x) => x.n < lim.drift_window ? `n=${x.n} (warming up)` :
+    `${x.wins}/${x.n} = ${pct(x.win_rate)} vs ${pct(x.mean_implied)} implied${x.halt ? " — HALT" : ""}`;
+  $("risk").innerHTML = `
+    <div class="card"><div class="k">Today P&amp;L vs halt (−${fmtC(lim.max_daily_loss_cents).slice(1)})</div>
+      <div class="v ${d.total_cents >= 0 ? "pos" : "neg"}">${fmtC(d.total_cents)}</div>
+      <div class="riskbar ${danger ? "danger" : usePct >= 40 && d.total_cents < 0 ? "warn" : ""}"><div style="width:${usePct}%"></div></div>
+      <div class="s">realized ${fmtC(d.realized_cents)} · open risk ${fmtC(d.open_risk_cents)}</div></div>
+    <div class="card"><div class="k">Exposure</div><div class="v">${d.n_open}<span style="font-size:13px">/${lim.max_open}</span></div>
+      <div class="s">open positions · single-trade cap ${fmtC(lim.max_position_cents)}</div></div>
+    <div class="card"><div class="k">Drift: crypto</div><div class="v" style="font-size:15px">${esc(driftTxt(dc))}</div>
+      <div class="s">halts below ${pct(lim.drift_floor)} trailing-${lim.drift_window} when model claimed ≥55%</div></div>
+    <div class="card"><div class="k">Drift: weather</div><div class="v" style="font-size:15px">${esc(driftTxt(dw))}</div>
+      <div class="s">same rule, KXHIGH flow only</div></div>`;
+}
+
 async function loadEval() {
   try {
     const e = await api("/api/eval");
@@ -330,6 +366,15 @@ async function boot() {
     cycleFilter = ch.dataset.f; loadAuto();
   });
   $("resolveBtn").onclick = async () => { await api("/api/resolve", { method: "POST" }); toast("Open trades re-checked against Kalshi results.", "ok"); loadStats(); loadTrades(); };
+  $("haltBtn").onclick = async () => {
+    const ok = await confirmDlg({ title: "HALT ALL trading?",
+      body: "Stops crypto + weather paper traders immediately and records a manual halt. Resolve to resume: clear the halt by restarting a trader.",
+      okLabel: "HALT ALL", danger: true });
+    if (!ok) return;
+    try { await api("/api/halt-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); toast("All trading halted.", "err"); }
+    catch (e) { toast("Halt failed: " + e.message, "err"); }
+    loadRisk(); loadAuto();
+  };
   $("atStart").onclick = async () => {
     const ok = await confirmDlg({ title: "Start auto paper-trader?",
       body: `Every ${$("atInterval").value} min it may place paper trades (no real money) at edge ≥ ${$("atThresh").value}, conviction ≥ ${$("atConf").value}.`,
@@ -366,6 +411,7 @@ async function boot() {
   }, 30000);
   Poller.add(async () => { loadStats(); }, 30000);
   Poller.add(async () => { loadTrades(); loadAuto(); }, 30000);
+  Poller.add(async () => { loadRisk(); }, 30000);
 
   // countdown ticker
   let remain = 30;

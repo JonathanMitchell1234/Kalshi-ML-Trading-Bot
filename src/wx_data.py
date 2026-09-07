@@ -98,6 +98,13 @@ def station_daily(city: str) -> pd.DataFrame:
     g["cloud"] = np.nan
     g["wind"] = np.nan
     g["src_stn"] = 1
+    # QC: physical range, spike (>40F day jump impossible), persistence (>6 identical)
+    n0 = len(g)
+    g = g[(g["tmax"] >= -60) & (g["tmax"] <= 130)]
+    g = g[g["tmax"].diff().abs().fillna(0) <= 40]
+    g = g[~(g["tmax"].rolling(7, min_periods=7).std().fillna(1) == 0)]
+    if len(g) < n0:
+        print(f"station QC dropped {n0 - len(g)} rows for {city}")
     return g
 
 
@@ -166,8 +173,11 @@ def assemble_obs(city: str) -> pd.DataFrame:
         obs = stn.merge(era[["date", "precip", "cloud", "wind", "hum", "gust"]], on="date", how="left",
                         suffixes=("", "_era"))
         for col in ("precip", "cloud", "wind", "hum", "gust"):
-            if col in obs.columns:
-                obs[col] = obs[col].fillna(obs[f"{col}_era"])
+            ecol = f"{col}_era"
+            if col in obs.columns and ecol in obs.columns:
+                obs[col] = obs[col].fillna(obs[ecol])
+            elif ecol in obs.columns:
+                obs[col] = obs[ecol]
         obs = obs.drop(columns=[c for c in obs.columns if c.endswith("_era")])
     except Exception as e:
         print(f"station obs unavailable ({e}), ERA5 only")
@@ -244,7 +254,7 @@ def fetch_forecast_snapshot(city: str) -> dict:
     """Current GFS snapshot: daily max today + next 2 days, hourly today, model time."""
     c = CITIES[city]
     j = _get(FCST, {"latitude": c["lat"], "longitude": c["lon"],
-                    "hourly": "temperature_2m,precipitation_probability,cloud_cover,pressure_msl,relative_humidity_2m,wind_gusts_10m,shortwave_radiation,wind_speed_10m,wind_direction_10m,"
+                    "hourly": "temperature_2m,precipitation_probability,cloud_cover,pressure_msl,relative_humidity_2m,wind_gusts_10m,shortwave_radiation,wind_speed_10m,wind_direction_10m,dew_point_2m,"
                               "temperature_850hPa,temperature_700hPa,geopotential_height_500hPa,"
                               "dew_point_2m",
                     "daily": "temperature_2m_max,precipitation_sum",

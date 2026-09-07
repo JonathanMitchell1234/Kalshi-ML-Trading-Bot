@@ -463,6 +463,37 @@ def api_wx_auto_stop():
 def api_wx_auto_cycle():
     return W.run_cycle()
 
+
+@app.get("/api/risk")
+def api_risk():
+    import risk as R
+    dp = T.day_pnl()
+    tp_c = T.trailing_perf(R.DRIFT_N, "crypto")
+    tp_w = T.trailing_perf(R.DRIFT_N, "wx")
+    dh, dh_reason = R.check_daily_halt(dp["total_cents"])
+    dc, dc_reason = R.check_drift(tp_c["wins"], tp_c["n"], tp_c["mean_implied"])
+    dw, dw_reason = R.check_drift(tp_w["wins"], tp_w["n"], tp_w["mean_implied"])
+    return {
+        "mode": "LIVE" if R.LIVE_OK else "PAPER",
+        "limits": {"max_daily_loss_cents": R.MAX_DAILY_LOSS_C, "max_open": R.MAX_OPEN,
+                   "max_position_cents": R.MAX_POS_C, "drift_window": R.DRIFT_N,
+                   "drift_floor": R.DRIFT_FLOOR},
+        "day": dp,
+        "daily_breached": dh, "daily_reason": dh_reason,
+        "drift": {"crypto": {**tp_c, "halt": dc, "reason": dc_reason},
+                  "wx": {**tp_w, "halt": dw, "reason": dw_reason}},
+        "halts": T.halt_state(),
+    }
+
+
+@app.post("/api/halt-all")
+def api_halt_all(payload: dict = {}):
+    reason = (payload or {}).get("reason", "manual kill switch")
+    T.trip_halt("all", reason)
+    A.stop_trader()
+    W.stop_trader()
+    return {"halted": True, "reason": reason}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=False)

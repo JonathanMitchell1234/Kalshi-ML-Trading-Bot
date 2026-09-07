@@ -87,6 +87,41 @@ def daily_wind(hourly: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def station_dpd_daily(city: str) -> pd.DataFrame:
+    """2m dewpoint depression from settlement-site obs (station tmpf + dewpoint).
+
+    Same site, same hours: no basis games. Returns date, dpd_min, dpd_mean.
+    """
+    import pandas as pd
+    from wx_data import DATA_DIR
+    stn = pd.read_csv(DATA_DIR / f"wx_{city.lower()}_stn.csv", parse_dates=["time"])
+    dpd = pd.read_csv(DATA_DIR / f"wx_{city.lower()}_dpd.csv", parse_dates=["time"])
+    stn["time"] = pd.to_datetime(stn["time"]).dt.floor("h")
+    dpd["time"] = pd.to_datetime(dpd["time"]).dt.floor("h")
+    m = stn[["time", "tmpf"]].merge(dpd[["time", "dw"]], on="time", how="inner")
+    m["t2m"] = (m["tmpf"] - 32) * 5 / 9
+    m["day"] = m["time"].dt.floor("D")
+    m["dpd"] = m["t2m"] - m["dw"]
+    g = m.groupby("day")["dpd"].agg(["min", "mean"]).reset_index().rename(
+        columns={"day": "date", "min": "dpd_min", "mean": "dpd_mean"})
+    return g
+
+
+def daily_dpd(hourly: pd.DataFrame) -> pd.DataFrame:
+    """Hourly 2m dewpoint -> daily min/mean depression vs 2m temp.
+
+    Requires columns time, t2m, dw (same units). Dry afternoons (large
+    depression) precede strong heating; saturated air caps it.
+    """
+    h = hourly.copy()
+    h["time"] = pd.to_datetime(h["time"]).dt.tz_localize(None)
+    h["dpd"] = h["t2m"] - h["dw"]
+    h["day"] = h["time"].dt.floor("D")
+    g = h.groupby("day")["dpd"].agg(["min", "mean"]).reset_index().rename(
+        columns={"day": "date", "min": "dpd_min", "mean": "dpd_mean"})
+    return g
+
+
 def solar_H0(doy: pd.Series, lat_deg: float) -> pd.Series:
     """Daily extraterrestrial insolation (MJ/m2/day): deterministic ceiling."""
     import math
@@ -103,11 +138,13 @@ def solar_H0(doy: pd.Series, lat_deg: float) -> pd.Series:
 def build_frame(obs: pd.DataFrame, upper_daily: pd.DataFrame | None = None,
                 keep_all: bool = False, snd_daily: pd.DataFrame | None = None,
                 lat_deg: float | None = None, sw_daily: pd.DataFrame | None = None,
-                wind_daily: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[str]]:
+                wind_daily: pd.DataFrame | None = None,
+                dpd_daily: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[str]]:
     _ = sw_daily  # intentionally unused (see NOTE above)
     df = obs.copy().sort_values("date").reset_index(drop=True)
     df["date"] = pd.to_datetime(df["date"])
     df["doy"] = df["date"].dt.dayofyear
+    df["year"] = df["date"].dt.year
     df["sin1"] = np.sin(2 * np.pi * df["doy"] / 365.25)
     df["cos1"] = np.cos(2 * np.pi * df["doy"] / 365.25)
     df["sin2"] = np.sin(4 * np.pi * df["doy"] / 365.25)
@@ -133,7 +170,7 @@ def build_frame(obs: pd.DataFrame, upper_daily: pd.DataFrame | None = None,
         df["hum1"] = df["hum"].shift(1)
     if "gust" in df.columns:
         df["gust1"] = df["gust"].shift(1)
-    feats = (["doy", "sin1", "cos1", "sin2", "cos2", "lag1", "lag2", "lag3",
+    feats = (["doy", "year", "sin1", "cos1", "sin2", "cos2", "lag1", "lag2", "lag3",
               "tmin1", "range1", "mean3", "mean7", "slope3", "clim", "climstd",
               "anom1", "anom3", "precip1", "cloud1", "wind1"] +
              [c for c in ("hum1", "gust1") if c in df.columns])
@@ -164,6 +201,12 @@ def build_frame(obs: pd.DataFrame, upper_daily: pd.DataFrame | None = None,
         for col in ["wind_u", "wind_v", "onshore"]:
             df[col] = df["date"].map(dict(zip(u["date"], u[col]))).shift(1)
         feats += ["wind_u", "wind_v", "onshore"]
+    if dpd_daily is not None:
+        u = dpd_daily.copy()
+        u["date"] = pd.to_datetime(u["date"]).dt.tz_localize(None)
+        for col in ["dpd_min", "dpd_mean"]:
+            df[col] = df["date"].map(dict(zip(u["date"], u[col]))).shift(1)
+        feats += ["dpd_min", "dpd_mean"]
     if snd_daily is not None:
         u = snd_daily.copy()
         u["date"] = pd.to_datetime(u["date"]).dt.tz_localize(None)

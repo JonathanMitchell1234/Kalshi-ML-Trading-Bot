@@ -73,6 +73,15 @@ tr.pick { background: var(--blue-bg); }
 .pill { display: inline-block; padding: 1px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; }
 .pill.open { background: var(--blue-bg); color: var(--blue); } .pill.won, .pill.buy { background: var(--green-bg); color: var(--green); }
 .pill.lost, .pill.error { background: var(--red-bg); color: var(--red); } .pill.void, .pill.skip { background: #8b949e22; color: var(--dim); }
+.pill.halt { background: var(--red); color: #fff; font-weight: 700; }
+.modebadge { font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 6px;
+  background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
+.riskbar { height: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 6px 0; }
+.riskbar > div { height: 100%; background: var(--green); }
+.riskbar.danger > div { background: var(--red); }
+.riskbar.warn > div { background: var(--amber); }
+.haltbanner { background: var(--red-bg); border: 1px solid var(--red); border-radius: var(--radius);
+  padding: 10px 14px; margin: 12px 0; font-size: 13px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { border: 1px solid var(--line); background: transparent; color: var(--dim); border-radius: 20px;
   padding: 3px 11px; font-size: 12px; cursor: pointer; }

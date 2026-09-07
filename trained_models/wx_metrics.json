@@ -1,50 +1,52 @@
 {
  "NYC": {
   "city": "NYC",
-  "n_test": 424,
-  "booster": "xgboost",
-  "rmse": 6.318,
-  "mae": 4.915,
-  "bias_test": 0.095,
-  "brier_bayes": 0.0455,
-  "brier_gauss": 0.0456,
+  "n_test": 419,
+  "booster": "lightgbm",
+  "anomaly_target": false,
+  "rmse": 5.785,
+  "mae": 4.542,
+  "bias_test": 0.755,
+  "brier_bayes": 0.0495,
+  "brier_gauss": 0.0496,
   "brier_clim": 0.25,
   "winner": "bayes-t",
   "bayes_params": {
-   "bias": -0.24157505789719064,
-   "sigma": 7.484397092386013,
-   "nu": 180.0,
-   "scale": 7.505509679016293,
-   "n": 176
+   "bias": -0.6656332371573191,
+   "sigma": 7.642787308585018,
+   "nu": 179.0,
+   "scale": 7.664469018269938,
+   "n": 175
   },
   "gauss_params": {
-   "bias": -0.24294764345342468,
-   "sigma": 7.562939423928418
+   "bias": -0.669436855655361,
+   "sigma": 7.723558696686285
   },
-  "test_start": "2025-07-01"
+  "test_start": "2025-07-06"
  },
  "CHI": {
   "city": "CHI",
-  "n_test": 427,
-  "booster": "xgboost",
-  "rmse": 7.21,
-  "mae": 5.65,
-  "bias_test": -0.211,
-  "brier_bayes": 0.0556,
-  "brier_gauss": 0.0557,
-  "brier_clim": 0.25,
+  "n_test": 422,
+  "booster": "lightgbm",
+  "anomaly_target": false,
+  "rmse": 6.903,
+  "mae": 5.209,
+  "bias_test": -0.254,
+  "brier_bayes": 0.0574,
+  "brier_gauss": 0.0574,
+  "brier_clim": 0.2499,
   "winner": "bayes-t",
   "bayes_params": {
-   "bias": -1.0797412599836078,
-   "sigma": 7.885132694716173,
-   "nu": 185.0,
-   "scale": 7.906765472526091,
-   "n": 181
+   "bias": -0.37968468470923217,
+   "sigma": 7.703205636006273,
+   "nu": 184.0,
+   "scale": 7.72445589882338,
+   "n": 180
   },
   "gauss_params": {
-   "bias": -1.0857066813094842,
-   "sigma": 7.965832241121181
+   "bias": -0.3817940440687279,
+   "sigma": 7.782566136221442
   },
-  "test_start": "2025-07-01"
+  "test_start": "2025-07-06"
  }
 }

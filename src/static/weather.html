@@ -9,6 +9,7 @@
 <body>
 <header class="topbar">
   <span class="brand">BitBot</span>
+  <span class="modebadge" id="modeBadge">PAPER</span>
   <nav><a href="/">Crypto</a><a href="/weather" aria-current="page">Weather</a></nav>
   <span class="spacer"></span>
   <span id="clock"></span>
@@ -18,6 +19,7 @@
 </header>
 
 <h1>Weather <span class="sub">Kalshi daily highs, NYC + Chicago · paper only</span></h1>
+<div id="haltBanner"></div>
 
 <section class="hero" id="hero" aria-live="polite">
   <h2>Should it be trading right now?</h2>
@@ -144,6 +146,17 @@ async function buy(ticker) {
   } catch (e) { toast("Rejected: " + e.message, "err"); }
 }
 
+async function loadRisk() {
+  try {
+    const r = await jget("/api/risk");
+    $("modeBadge").textContent = r.mode || "PAPER";
+    const halts = r.halts || [];
+    $("haltBanner").innerHTML = halts.map((h) =>
+      `<div class="haltbanner" role="alert"><b>HALTED</b> (${esc(h.scope)}): ${esc(h.reason)}</div>`).join("");
+    return r;
+  } catch { return null; }
+}
+
 async function loadAuto() {
   try {
     const s = await jget("/api/wx/auto");
@@ -190,6 +203,7 @@ function boot() {
   }, 30000);
   App.Poller.add(loadWx, 60000);
   App.Poller.add(loadAuto, 30000);
+  App.Poller.add(loadRisk, 30000);
   let remain = 30;
   setInterval(() => {
     etClock($("clock"));

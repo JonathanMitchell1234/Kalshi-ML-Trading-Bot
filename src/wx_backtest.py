@@ -53,6 +53,15 @@ def _pooled_frame():
     return full.sort_values("date").reset_index(drop=True), pfeats
 
 
+def _crps_t(cal, loc_pred: float, outcome: float, span: float = 40.0, steps: int = 161) -> float:
+    """Mean CRPS of the predictive CDF vs outcome (numeric integration)."""
+    import numpy as _np
+    xs = _np.linspace(outcome - span, outcome + span, steps)
+    F = _np.array([cal.cdf(float(x), loc_pred) for x in xs])
+    H = (xs >= outcome).astype(float)
+    return float(_np.trapezoid((F - H) ** 2, xs))
+
+
 def run_wx_backtest(city: str = "NYC", n_days: int = 120, progress=None, pooled: bool = False) -> dict:
     M = load_wx(city)
     if pooled:
@@ -87,9 +96,17 @@ def run_wx_backtest(city: str = "NYC", n_days: int = 120, progress=None, pooled:
         from wx_data import CITIES as _C
         snd = daily_diag(pd.read_csv(sp, parse_dates=["time"]), _C[city]["tz"])
     from wx_data import CITIES as _CC2
+    from wx_features import station_dpd_daily as _sdd
+    try:
+        _dpd = _sdd(city)
+    except Exception:
+        _dpd = None
     df, _ = build_frame(obs, daily_upper(up), snd_daily=snd,
-                        lat_deg=_CC2[city]["lat"], sw_daily=_sw, wind_daily=_wind)
+                        lat_deg=_CC2[city]["lat"], sw_daily=_sw, wind_daily=_wind,
+                        dpd_daily=_dpd)
     prow = dict(zip(df["date"], M["gbm"].predict(df[M["feats"]].values)))
+    _anom_bt = str(M.get("target_mode", "absolute")) == "anomaly"
+    _climmap = dict(zip(df["date"], df["clim"])) if _anom_bt else {}
     if pooled:
         # date-aligned pooled predictions on THIS city's frame (index-safe)
         _dmap = dict(zip(_pfull["date"].astype(str) + (_pfull["city_NYC"] > 0.5).map(
@@ -124,6 +141,8 @@ def run_wx_backtest(city: str = "NYC", n_days: int = 120, progress=None, pooled:
         if evdate not in prow:
             continue
         pred = float(prow[evdate])
+        if _anom_bt:  # model speaks anomaly: translate to absolute degrees
+            pred += float(_climmap.get(evdate, 0.0))
         _brow = df[df["date"] == evdate]
         _brow = _brow.iloc[0].to_dict() if len(_brow) else {}
         if pooled:
@@ -135,7 +154,8 @@ def run_wx_backtest(city: str = "NYC", n_days: int = 120, progress=None, pooled:
             _cal = trailing_cal_regime(None, [], df, evdate, _brow,
                                        pred_override=df["_pp"])[0]
         else:
-            _cal = trailing_cal_regime(M["gbm"], M["feats"], df, evdate, _brow)[0]
+            _cal = trailing_cal_regime(M["gbm"], M["feats"], df, evdate, _brow,
+                                       mode=M.get("target_mode", "absolute"))[0]
         fairs = bracket_probs(city, pred, brackets, _cal)  # RAW density mass: gaps
         w = winners[0]                               # between listed brackets are dead outcomes
         try:
@@ -151,15 +171,27 @@ def run_wx_backtest(city: str = "NYC", n_days: int = 120, progress=None, pooled:
             "hit": int(max(fairs, key=fairs.get) == w),
             "err15": round(1 - fairs.get(w, 0.0), 4),
             "expiry_spot": expiry,
+            "_pit": _cal.cdf(expiry, pred) if expiry is not None else None,
+            "_crps": _crps_t(_cal, pred, expiry) if expiry is not None else None,
         })
         if progress:
             progress(len(picks), n_days)
+    import numpy as _np
+    from scipy import stats as _st
+    _pits = [p["_pit"] for p in picks if p["_pit"] is not None]
+    _crs = [p["_crps"] for p in picks if p["_crps"] is not None]
+    for _p in picks:
+        _p.pop("_pit", None)
+        _p.pop("_crps", None)
+    _ks = round(float(_st.kstest(_pits, "uniform").pvalue), 4) if len(_pits) > 10 else None
+    _crps_mean = round(float(_np.mean(_crs)), 3) if _crs else None
+    hits = sum(p["hit"] for p in picks)
     rid = save_backtest_run(n_events=len(picks), lead_min=0, picks=picks,
                             note=f"WX {city} density backtest, scanned={scanned}")
-    hits = sum(p["hit"] for p in picks)
     return {"run_id": rid, "n": len(picks),
             "hit_rate": round(hits / len(picks), 4) if picks else None,
-            "mean_winner_mass": round(float(np.mean([1 - p["err15"] for p in picks])), 4) if picks else None}
+            "mean_winner_mass": round(float(np.mean([1 - p["err15"] for p in picks])), 4) if picks else None,
+            "crps_mean": _crps_mean, "pit_ks_pvalue": _ks, "n_pit": len(_pits)}
 
 
 if __name__ == "__main__":
