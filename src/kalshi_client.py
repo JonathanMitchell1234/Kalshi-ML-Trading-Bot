@@ -156,7 +156,12 @@ def parse_updown(m: dict, event_ticker: str = "") -> dict:
     no_ask = _cents(m.get("no_ask_dollars"))
     yes_bid = _cents(m.get("yes_bid_dollars"))
     if no_ask is None and yes_bid is not None:
-        no_ask = 100 - yes_bid  # lift the resting NO bid
+        no_ask = 100 - yes_bid
+    def _sz(x):
+        try:
+            return int(float(x))  # fp units track contracts at our sizes; documented assumption
+        except (TypeError, ValueError):
+            return None  # lift the resting NO bid
     return {
         "event": event_ticker,
         "ticker": m.get("ticker"),
@@ -167,6 +172,10 @@ def parse_updown(m: dict, event_ticker: str = "") -> dict:
         "yes_ask": _cents(m.get("yes_ask_dollars")),
         "no_bid": _cents(m.get("no_bid_dollars")),
         "no_ask": no_ask,
+        "yes_bid_size": _sz(m.get("yes_bid_size_fp")),
+        "yes_ask_size": _sz(m.get("yes_ask_size_fp")),
+        "no_bid_size": _sz(m.get("no_bid_size_fp")),
+        "no_ask_size": _sz(m.get("no_ask_size_fp")),
         "close_time": m.get("close_time"),
         "open_time": m.get("open_time"),
         "expiration_value": m.get("expiration_value"),

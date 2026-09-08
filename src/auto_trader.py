@@ -266,8 +266,62 @@ def _eval_asset(asset: str, cfg: dict, conf: float, max_in: float) -> dict:
               f"x{n} @ {pick['paid']}¢ fair={pick['fair']} edge_net={pick['edge']} "
               f"kelly={sizing['kelly_f']}")
     log_cycle("buy", detail, trade_id=tid, **base)
+    _maybe_maker_leg(asset, m, pick, n, pred, p_stack, mins_left, cfg, base)
+    _maybe_live(asset, event, m["ticker"], pick, n, pred, p_stack, base)
     return {"asset": asset, "action": "buy", "trade_id": tid, "ticker": m["ticker"], **pick,
             "p_stack": p_stack, "contracts": n, **base}
+
+
+def _maybe_live(asset, event, ticker, pick, n, pred, p_stack, base):
+    """Real-money mirror: no-op unless BOTH env + DB arm are set (2-key)."""
+    try:
+        import live as L
+        if not L.is_armed():
+            return
+        r = L.live_fill(event, ticker, pick["side"], n, pick["paid"],
+                        pred_price=pred.get("pred_price"), spot=pred.get("spot"),
+                        p_up=p_stack, edge=pick["edge"],
+                        model_version=T.model_version(f"dir_{asset}"))
+        log_cycle("live" if r.get("placed") else "skip",
+                  f"LIVE {'PLACED ' + str(r.get('trade_id')) if r.get('placed') else 'blocked: ' + r.get('reason', '')}",
+                  **base)
+    except Exception as e:
+        log_cycle("error", f"live mirror failed: {e}", **base)
+
+
+def _maybe_maker_leg(asset, m, pick, n, pred, p_stack, mins_left, cfg, base):
+    """Companion maker fill at mid (EXEC_MODE maker|both). Separate paper trade
+    so taker-vs-maker P&L compares empirically. No depth info -> no fill."""
+    import os as _os
+    if _os.getenv("EXEC_MODE", "both") not in ("maker", "both"):
+        return
+    from execution import mid_price, maker_fill, maker_edge
+    side = pick["side"]
+    bid = m["yes_bid"] if side == "yes" else m["no_bid"]
+    ask = m["yes_ask"] if side == "yes" else m["no_ask"]
+    depth = m["yes_bid_size"] if side == "yes" else m["no_bid_size"]
+    mid = mid_price(bid, ask)
+    if mid is None:
+        log_cycle("skip", f"{asset} maker: no room at mid (bid {bid}/ask {ask})", **base)
+        return
+    fair = pick["fair"]  # already side-adjusted by pick_15m
+    edge_m = maker_edge(fair, mid)
+    if edge_m < cfg["threshold"]:
+        log_cycle("skip", f"{asset} maker: edge {edge_m:.3f} < {cfg['threshold']} at mid {mid}¢", **base)
+        return
+    filled, unfilled = maker_fill(n, depth)
+    if filled <= 0:
+        log_cycle("skip", f"{asset} maker: no visible depth at mid {mid}¢", **base)
+        return
+    tid = T.record_paper_trade(
+        event_ticker=base.get("event"), market_ticker=m["ticker"], side=side,
+        contracts=filled, price_paid_cents=mid,
+        pred_price=pred.get("pred_price"), spot=pred.get("spot"), p_up=p_stack,
+        edge=round(edge_m, 4), minutes_to_expiry=round(mins_left, 1),
+        model_version=T.model_version(f"dir_{asset}"), exec_mode="maker")
+    log_cycle("buy", f"{asset} MAKER {side.upper()} {m['ticker']} x{filled} @ {mid}¢ "
+                     f"fair={fair:.3f} edge_net={edge_m:.3f} (unfilled {unfilled})",
+              trade_id=tid, **base)
 
 
 def _error_streak(k: int = 3) -> bool:
@@ -285,14 +339,21 @@ def recent_cycles(limit: int = 50) -> list[dict]:
 
 def secs_to_next_window(offset_s: int = 45) -> float:
     """Seconds until next :00/:15/:30/:45 UTC + offset (fresh candle + open book)."""
+    return secs_to_next_phase(15, offset_s)
+
+
+def secs_to_next_phase(interval_min: int, offset_s: int = 45) -> float:
+    """Sleep-until-next-tick: phase-locks every loop so one slow cycle (or a
+    laptop nap) can never shift the phase permanently. interval=15 matches
+    Kalshi 15-min windows (+45s for candle close + book open)."""
     now = datetime.now(timezone.utc)
-    minute = (now.minute // 15 + 1) * 15
-    nxt = now.replace(second=0, microsecond=0)
-    if minute >= 60:
-        nxt = (nxt.replace(minute=0) + timedelta(hours=1))
-    else:
-        nxt = nxt.replace(minute=minute)
-    return max((nxt - now).total_seconds() + offset_s, 1)
+    step = max(int(interval_min), 1) * 60
+    base = now.replace(minute=0, second=0, microsecond=0)
+    elapsed = (now - base).total_seconds()
+    nxt = base + timedelta(seconds=(int(elapsed) // step + 1) * step + offset_s)
+    if (nxt - now).total_seconds() < 1:
+        nxt += timedelta(seconds=step)
+    return max((nxt - now).total_seconds(), 1)
 
 
 class AutoTrader(threading.Thread):
@@ -315,9 +376,13 @@ class AutoTrader(threading.Thread):
                 self.state["last"] = run_cycle(cfg)
             except Exception as e:
                 self.state["last"] = {"action": "error", "reason": str(e)}
-            wait = cfg["interval_min"] * 60 - (time.monotonic() - t0)
-            self.state["next_in_s"] = int(max(wait, 0))
-            self._stop_event.wait(max(wait, 0))
+            dur = time.monotonic() - t0
+            self.state["last_duration_s"] = round(dur, 1)
+            if dur > 5 * 60:
+                log_cycle("error", f"cycle overran: {dur:.0f}s (phase re-anchored next loop)")
+            wait = secs_to_next_phase(cfg["interval_min"])
+            self.state["next_in_s"] = int(wait)
+            self._stop_event.wait(wait)
         self.state["running"] = False
         self.state["next_in_s"] = None
 
@@ -369,11 +434,11 @@ def main():
     set_config(enabled=1)
     print(f"auto-trader aligned to 15m windows, every {a.interval} min (Ctrl-C to stop)")
     try:
-        time.sleep(secs_to_next_window())
+        time.sleep(secs_to_next_phase(a.interval))
         while True:
             t0 = time.monotonic()
             print(run_cycle(), flush=True)
-            time.sleep(max(a.interval * 60 - (time.monotonic() - t0), 0))
+            time.sleep(secs_to_next_phase(a.interval))
     except KeyboardInterrupt:
         set_config(enabled=0)
         print("stopped")

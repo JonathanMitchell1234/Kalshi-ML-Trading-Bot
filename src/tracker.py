@@ -162,23 +162,31 @@ def clear_halts(scope: str | None = None):
 
 
 # ------------------------------------------------------------ paper trades
+def _ensure_exec_col(c):
+    try:
+        c.execute("ALTER TABLE paper_trades ADD COLUMN exec_mode TEXT DEFAULT 'taker'")
+    except Exception:
+        pass
+
+
 def record_paper_trade(event_ticker: str, market_ticker: str, side: str, contracts: int,
                        price_paid_cents: int, pred_price: float | None = None,
                        spot: float | None = None, p_up: float | None = None,
                        edge: float | None = None, minutes_to_expiry: float | None = None,
-                       model_version: str = "") -> int:
+                       model_version: str = "", exec_mode: str = "taker") -> int:
     with conn() as c:
         try:
             c.execute("ALTER TABLE paper_trades ADD COLUMN model_version TEXT DEFAULT ''")
         except Exception:
             pass
+        _ensure_exec_col(c)
         cur = c.execute(
             "INSERT INTO paper_trades(created_at,event_ticker,market_ticker,side,contracts,"
-            "price_paid_cents,cost_cents,pred_price,spot,p_up,edge,minutes_to_expiry,model_version)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "price_paid_cents,cost_cents,pred_price,spot,p_up,edge,minutes_to_expiry,model_version,exec_mode)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (now_iso(), event_ticker, market_ticker, side, contracts, price_paid_cents,
              contracts * price_paid_cents, pred_price, spot, p_up, edge, minutes_to_expiry,
-             model_version))
+             model_version, exec_mode))
         return cur.lastrowid
 
 

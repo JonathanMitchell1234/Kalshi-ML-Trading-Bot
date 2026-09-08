@@ -61,9 +61,23 @@ python src/train_stack.py       # logistic stack + comparison
   200 live Kalshi windows each: **BTC 56.5% (69 trades), ETH 60.9% (23)**.
 - Lesson logged: an UP-framed hit metric once faked a crisis (down-heavy
   buckets read low); all conviction metrics are side-aware now.
+## Live trading path (real money — gated, paper default)
+- `src/live.py` — balance/positions/orders reads (safe anytime); `place_limit`
+  / `cancel_order` / `cancel_all` hard-gated by `risk.require_live()`.
+  2-key arming: `LIVE_TRADING=true` env **and** UI arm switch. No demo venue
+  is reachable from here, so verification is read-only + preflight until funded.
+- Preflight per order: 2-key armed, balance covers cost+fee, daily halt clear,
+  exposure caps, no active halts. Every fill mirrored to paper DB
+  (`exec_mode='live'`) + reconciliation vs exchange truth (`/api/live/status`).
+- Dashboard Live section: venue, balance, positions, arm/disarm (typed
+  confirm), cancel-all. Kill switch now also flattens resting orders.
+
 ## Sizing + evaluation + risk (institutional Phase 1)
 - `src/sizing.py` — fractional Kelly on fee-net edge (tenth-Kelly default,
   2% bankroll cap, 10-contract cap). Both traders size every paper fill.
+- `src/execution.py` — maker-mode paper (mid limits, maker fee, depth-capped
+  fills; `EXEC_MODE`, default both with side-by-side P&L). Taker-fee float bug
+  fixed (schedule-exact now). `src/selftest.py` runs at boot + `/api/health`.
 - `src/evaluate.py` + `/api/eval` + dashboard section — per-model-version
   P&L, Wilson 95% CIs, equity/Sharpe/drawdown, live reliability.
 - `src/risk.py` + `/api/risk` + `POST /api/halt-all` — daily-loss halt

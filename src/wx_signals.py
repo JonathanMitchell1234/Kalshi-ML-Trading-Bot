@@ -101,7 +101,8 @@ def gfs_for_target(city: str, target, do_log: bool = True) -> tuple[float | None
     except Exception:
         pass
     entry = {"ts": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds"), "city": city,
-             "target": tstr, "gfs_max": gfs, "ens_mean": ens_mean, "ens_std": ens_std}
+             "target": tstr, "gfs_max": gfs, "ens_mean": ens_mean, "ens_std": ens_std,
+             "ecmwf_max": None}  # key always present: keeps the CSV rectangular
     try:  # second opinion: ECMWF IFS daily max (multi-model future blending)
         from wx_data import CITIES as _CCe
         _c = _CCe[city]

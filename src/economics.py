@@ -14,7 +14,7 @@ MULT = float(os.getenv("KALSHI_FEE_MULT", "1"))
 
 def taker_fee_cents(price_cents: float, contracts: int = 1, mult: float = MULT) -> float:
     p = min(max(price_cents / 100.0, 0.01), 0.99)
-    per_contract = math.ceil(mult * 0.07 * p * (1 - p) * 10000) / 10000  # dollars
+    per_contract = math.ceil(mult * 0.07 * p * (1 - p) * 10000 - 1e-9) / 10000  # dollars (eps: float dust vs schedule)
     return per_contract * 100 * contracts  # cents
 
 

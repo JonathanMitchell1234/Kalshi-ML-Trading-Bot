@@ -75,5 +75,21 @@ def reliability(n_bins: int = 5) -> list[dict]:
     return out
 
 
+def by_mode() -> list[dict]:
+    df = trades_df()
+    if "exec_mode" not in df.columns:
+        return []
+    out = []
+    for mode, g in df.groupby(df["exec_mode"].fillna("taker")):
+        st = g[g["status"].isin(("won", "lost"))]
+        w = int((st["status"] == "won").sum())
+        lo, hi = wilson(w, len(st))
+        out.append({"mode": mode, "trades": len(g), "settled": len(st), "wins": w,
+                    "win_rate": round(w / len(st), 4) if len(st) else None,
+                    "ci95": [lo, hi], "pnl_cents": int(st["pnl_cents"].fillna(0).sum())})
+    return out
+
+
 def summary() -> dict:
-    return {"versions": version_pnl(), "equity": equity(), "reliability": reliability()}
+    return {"versions": version_pnl(), "equity": equity(), "reliability": reliability(),
+            "modes": by_mode()}

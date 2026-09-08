@@ -42,6 +42,24 @@
 </section>
 
 <section>
+  <h2>Live trading <span class="sub">real money path · 2-key armed (env + this switch)</span></h2>
+  <div class="card">
+    <div class="row">
+      <span class="note" id="liveLine">Loading…</span>
+    </div>
+    <div class="row">
+      <button class="danger-ghost" id="armBtn">Arm live</button>
+      <button class="ghost" id="disarmBtn">Disarm</button>
+      <button class="ghost" id="cancelBtn">Cancel resting orders</button>
+    </div>
+    <div class="note">Arming alone places nothing: every live fill still needs a model signal,
+    full preflight (balance, caps, halts), and fee-aware edge. Paper records mirror every fill.</div>
+    <table id="livePos"><thead><tr><th>Exchange positions</th><th>Contracts</th><th>P&amp;L</th></tr></thead>
+    <tbody><tr><td colspan="3" class="empty">—</td></tr></tbody></table>
+  </div>
+</section>
+
+<section>
   <h2>Risk <span class="sub">daily halt · exposure caps · drift monitor</span><span class="spacer"></span>
     <button class="danger-ghost" id="haltBtn">HALT ALL</button></h2>
   <div class="grid" id="risk"></div>
@@ -101,6 +119,9 @@
   <div class="card twrap"><table id="eval"><thead><tr>
     <th>Model version</th><th>Trades</th><th>Settled</th><th>W</th><th>Win rate [95% CI]</th><th>P&amp;L</th>
   </tr></thead><tbody><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table>
+  <div class="sub" style="margin-top:8px">Taker vs maker paper (same outcomes, different cost basis):</div>
+  <table id="modes"><thead><tr><th>Mode</th><th>Trades</th><th>Settled</th><th>W</th><th>Win rate</th><th>P&amp;L</th></tr></thead>
+  <tbody><tr><td colspan="6" class="empty">—</td></tr></tbody></table>
   <div class="sub" style="margin-top:8px">Reliability (stored P vs realized):</div>
   <table id="rel"><thead><tr><th>P range</th><th>n</th><th>Mean P</th><th>Hit [95% CI]</th></tr></thead>
   <tbody><tr><td colspan="4" class="empty">—</td></tr></tbody></table></div>
@@ -254,8 +275,23 @@ async function loadStats() {
   } catch (e) { $("stats").innerHTML = `<div class="card"><div class="s">Stats unavailable: ${esc(e.message)}</div></div>`; }
 }
 
-async function loadRisk() {
-  let r;
+async function loadLive() {
+  try {
+    const s = await jget("/api/live/status");
+    $("modeBadge").textContent = s.armed && s.env_live ? "LIVE-ARMED" : "PAPER";
+    const bal = s.balance && s.balance.balance_breakdown ? s.balance.balance_dollars ?? (s.balance.balance / 100) : "?";
+    $("liveLine").innerHTML = `Venue <b>${esc(s.venue.replace("https://", ""))}</b> · balance <b>$${esc(String(bal))}</b> · ` +
+      `env <b>${s.env_live ? "LIVE" : "paper"}</b> · switch <b>${s.armed ? "ARMED" : "off"}</b> · ` +
+      `reconcile: <b class="${s.reconcile && s.reconcile.match ? "pos" : "neg"}">${s.reconcile && s.reconcile.match ? "match" : "DIFF"}</b>`;
+    const pos = (s.positions || []).filter((p) => parseFloat(p.position_fp || 0) !== 0);
+    document.querySelector("#livePos tbody").innerHTML = pos.map((p) =>
+      `<tr><td style="font-size:12px">${esc(p.ticker)}</td><td class="num">${esc(p.position_fp)}</td>
+       <td class="num ${parseFloat(p.realized_pnl_dollars || 0) >= 0 ? "pos" : "neg"}">$${esc(p.realized_pnl_dollars || "0")}</td></tr>`).join("")
+      || `<tr><td colspan="3" class="empty">No open exchange positions.</td></tr>`;
+  } catch (e) { $("liveLine").textContent = "live status unavailable: " + e.message; }
+}
+
+async function loadRisk() {  let r;
   try { r = await jget("/api/risk"); }
   catch (e) { $("risk").innerHTML = `<div class="card"><div class="s">Risk unavailable: ${esc(e.message)}</div></div>`; return; }
   $("modeBadge").textContent = r.mode || "PAPER";
@@ -293,6 +329,11 @@ async function loadEval() {
     const q = e.equity;
     sparkline($("equitySpark"), q.points.map((p) => ({ y: p.equity / 100 })));
     $("equityLine").textContent = `Realized ${fmtC(q.total_cents)} · Sharpe ${q.sharpe ?? "—"} · max drawdown ${fmtC(q.max_dd_cents)} · open risk ${fmtC(q.open_risk_cents)}`;
+    document.querySelector("#modes tbody").innerHTML = (e.modes || []).map((m) =>
+      `<tr><td>${esc(m.mode)}</td><td class="num">${m.trades}</td><td class="num">${m.settled}</td><td class="num">${m.wins}</td>
+       <td class="num">${m.win_rate == null ? "—" : pct(m.win_rate)}</td>
+       <td class="num ${m.pnl_cents >= 0 ? "pos" : "neg"}">${fmtC(m.pnl_cents)}</td></tr>`).join("")
+      || `<tr><td colspan="6" class="empty">—</td></tr>`;
     document.querySelector("#rel tbody").innerHTML = e.reliability.map((r) =>
       `<tr><td>${esc(r.range)}</td><td class="num">${r.n}</td><td class="num">${r.mean_p}</td>
        <td class="num">${pct(r.hit_rate)} <span class="note">[${pct(r.ci95[0], 0)}–${pct(r.ci95[1], 0)}]</span></td></tr>`).join("")
@@ -375,6 +416,31 @@ async function boot() {
     catch (e) { toast("Halt failed: " + e.message, "err"); }
     loadRisk(); loadAuto();
   };
+  $("armBtn").onclick = async () => {
+    const ok = await confirmDlg({ title: "ARM live trading?",
+      body: "This allows REAL ORDERS on the next qualifying signals (still gated by preflight, caps, halts). Type ARM below is not needed — click Arm to proceed. NOTHING is placed by arming alone.",
+      okLabel: "Arm live", danger: true });
+    if (!ok) return;
+    try {
+      const r = await api("/api/live/arm", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: "ARM" }) });
+      toast(r.armed ? "Live switch ARMED (env still gates real orders)." : "Arm incomplete — check LIVE_TRADING env.", r.armed ? "ok" : "err");
+    } catch (e) { toast("Arm failed: " + e.message, "err"); }
+    loadLive();
+  };
+  $("disarmBtn").onclick = async () => {
+    await api("/api/live/disarm", { method: "POST" }); toast("Live switch off."); loadLive();
+  };
+  $("cancelBtn").onclick = async () => {
+    const ok = await confirmDlg({ title: "Cancel all resting orders?",
+      body: "Sends cancel for every resting order on the exchange.", okLabel: "Cancel all", danger: true });
+    if (!ok) return;
+    try {
+      const r = await api("/api/live/cancel-all", { method: "POST" });
+      toast(`Cancel done: ${JSON.stringify(r.cancelled || r).slice(0, 120)}`, "ok");
+    } catch (e) { toast("Cancel failed: " + e.message, "err"); }
+    loadLive();
+  };
   $("atStart").onclick = async () => {
     const ok = await confirmDlg({ title: "Start auto paper-trader?",
       body: `Every ${$("atInterval").value} min it may place paper trades (no real money) at edge ≥ ${$("atThresh").value}, conviction ≥ ${$("atConf").value}.`,
@@ -412,6 +478,7 @@ async function boot() {
   Poller.add(async () => { loadStats(); }, 30000);
   Poller.add(async () => { loadTrades(); loadAuto(); }, 30000);
   Poller.add(async () => { loadRisk(); }, 30000);
+  Poller.add(async () => { loadLive(); }, 60000);
 
   // countdown ticker
   let remain = 30;

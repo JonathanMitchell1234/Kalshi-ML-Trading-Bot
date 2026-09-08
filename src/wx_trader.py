@@ -85,10 +85,16 @@ def _parse(m: dict) -> dict:
             return int(round(float(x) * 100))
         except (TypeError, ValueError):
             return None
+    def _sz(x):
+        try:
+            return int(float(x))
+        except (TypeError, ValueError):
+            return None
     return {"ticker": m.get("ticker"), "subtitle": m.get("subtitle"),
             "strike_type": m.get("strike_type"), "floor": m.get("floor_strike"),
             "cap": m.get("cap_strike"), "status": m.get("status"),
             "yes_bid": _c(m.get("yes_bid_dollars")), "yes_ask": _c(m.get("yes_ask_dollars")),
+            "yes_bid_size": _sz(m.get("yes_bid_size_fp")),
             "close_time": m.get("close_time")}
 
 
@@ -175,8 +181,45 @@ def _eval_city_date(city: str, target, cfg: dict) -> dict:
               f"({b['subtitle'] or b['floor']}-{b['cap']}) x{n} @ {b['yes_ask']}¢ "
               f"fair={fair:.3f} edge_net={edge:.3f} kelly={sizing['kelly_f']}")
     log_cycle("buy", detail, trade_id=tid, **base)
+    _maybe_maker_leg(city, b, fair, n, pred, cfg, base)
+    try:
+        import live as L
+        if L.is_armed():
+            r = L.live_fill(event, b["ticker"], "yes", n, b["yes_ask"],
+                            pred_price=pred["pred"], spot=pred["gfs_max"], p_up=fair,
+                            edge=round(edge, 4), model_version=T.model_version(f"wx_{city}"))
+            log_cycle("live" if r.get("placed") else "skip",
+                      f"LIVE {'PLACED ' + str(r.get('trade_id')) if r.get('placed') else 'blocked: ' + r.get('reason', '')}",
+                      **base)
+    except Exception as e:
+        log_cycle("error", f"live mirror failed: {e}", **base)
     return {"action": "buy", "trade_id": tid, "ticker": b["ticker"],
             "paid": b["yes_ask"], "fair": round(fair, 4), "edge": round(edge, 4), **base}
+
+
+def _maybe_maker_leg(city, b, fair, n, pred, cfg, base):
+    import os as _os
+    if _os.getenv("EXEC_MODE", "both") not in ("maker", "both"):
+        return
+    from execution import mid_price, maker_fill, maker_edge
+    mid = mid_price(b["yes_bid"], b["yes_ask"])
+    if mid is None:
+        return
+    edge_m = maker_edge(fair, mid)
+    if edge_m < cfg["threshold"]:
+        return
+    filled, unfilled = maker_fill(n, b.get("yes_bid_size"))
+    if filled <= 0:
+        return
+    tid = T.record_paper_trade(
+        event_ticker=base.get("event"), market_ticker=b["ticker"], side="yes",
+        contracts=filled, price_paid_cents=mid,
+        pred_price=pred["pred"], spot=pred["gfs_max"], p_up=fair,
+        edge=round(edge_m, 4), minutes_to_expiry=None,
+        model_version=T.model_version(f"wx_{city}"), exec_mode="maker")
+    log_cycle("buy", f"{city} MAKER YES {b['ticker']} x{filled} @ {mid}¢ "
+                     f"fair={fair:.3f} edge_net={edge_m:.3f} (unfilled {unfilled})",
+              trade_id=tid, **base)
 
 
 def _local_today(tz: str):

@@ -357,6 +357,12 @@ def api_health():
         except Exception as e:
             out["traders"][name] = {"running": False, "error": str(e)[:100]}
     out["uptime_s"] = int(_t.monotonic() - _STARTED)
+    try:
+        import selftest as _st
+        out["selftest"] = {"ok": _st.RESULTS.get("ok"), "ran_at": _st.RESULTS.get("ran_at"),
+                           "failed": [k for k, v in _st.RESULTS.get("checks", {}).items() if not v["ok"]]}
+    except Exception:
+        out["selftest"] = {"ok": None}
     return out
 
 
@@ -370,6 +376,14 @@ def _warm():
             overview()
         except Exception as e:
             print(f"warmup failed: {e}", flush=True)
+        try:
+            import selftest as _st
+            r = _st.run_all()
+            print(f"selftest ok={r['ok']}: " +
+                  ", ".join(f"{k}={'OK' if v['ok'] else 'FAIL:' + v.get('error', '')}"
+                            for k, v in r["checks"].items()), flush=True)
+        except Exception as e:
+            print(f"selftest crashed: {e}", flush=True)
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -492,7 +506,58 @@ def api_halt_all(payload: dict = {}):
     T.trip_halt("all", reason)
     A.stop_trader()
     W.stop_trader()
-    return {"halted": True, "reason": reason}
+    cancelled = []
+    try:
+        import live as L
+        if L.is_armed():
+            cancelled = L.cancel_all()
+    except Exception as e:
+        cancelled = [{"error": str(e)[:150]}]
+    return {"halted": True, "reason": reason, "cancelled": cancelled}
+
+
+class LiveArm(BaseModel):
+    confirm: str = ""
+
+
+@app.get("/api/live/status")
+def api_live_status():
+    import live as L
+    import risk as R
+    try:
+        bal = L.balance()
+    except Exception as e:
+        bal = {"error": str(e)[:150]}
+    try:
+        pos = L.positions()
+    except Exception as e:
+        pos = [{"error": str(e)[:150]}]
+    return {"env_live": R.LIVE_OK, "armed": L.is_armed(),
+            "venue": K.BASE, "balance": bal, "positions": pos,
+            "reconcile": L.reconcile()}
+
+
+@app.post("/api/live/arm")
+def api_live_arm(req: LiveArm):
+    import live as L
+    if req.confirm != "ARM":
+        raise HTTPException(400, 'send {"confirm":"ARM"} to arm live trading')
+    return {"armed": L.set_armed(True)}
+
+
+@app.post("/api/live/disarm")
+def api_live_disarm():
+    import live as L
+    return {"armed": L.set_armed(False)}
+
+
+@app.post("/api/live/cancel-all")
+def api_live_cancel_all():
+    import live as L
+    try:
+        return {"cancelled": L.cancel_all()}
+    except RuntimeError as e:
+        raise HTTPException(403, str(e))
 
 if __name__ == "__main__":
     import uvicorn
