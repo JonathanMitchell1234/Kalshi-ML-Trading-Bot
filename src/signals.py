@@ -102,10 +102,15 @@ def load_direction_stack(asset: str = "BTC"):
         try:
             px = _px(asset)
             try:
-                cal = joblib.load(MODEL_DIR / f"{px}dir_cal.pkl")
+                live = joblib.load(MODEL_DIR / f"{px}dir_cal_live.pkl")
+                import datetime as _dt
+                age_h = (_dt.datetime.now(_dt.timezone.utc) -
+                         _dt.datetime.fromisoformat(live.get("fitted_at", "2000-01-01"))).total_seconds() / 3600
+                cal = live if age_h < 72 else joblib.load(MODEL_DIR / f"{px}dir_cal.pkl")
+                cal_src = "live" if age_h < 72 else "base"
             except Exception:
-                cal = {"kind": "isotonic",
-                       "model": joblib.load(MODEL_DIR / f"{px}dir_iso.pkl")}
+                cal = joblib.load(MODEL_DIR / f"{px}dir_cal.pkl")
+                cal_src = "base"
             try:
                 _pca = joblib.load(MODEL_DIR / f"{px}dir_pca.pkl")
             except Exception:
@@ -114,6 +119,7 @@ def load_direction_stack(asset: str = "BTC"):
                  "pca": _pca,
                  "clf": joblib.load(MODEL_DIR / f"{px}dir_clf.pkl"),
                  "cal": cal,
+                 "cal_src": cal_src if "cal_src" in dir() else "base",
                  "gru_meta": None}
             if asset == "BTC":
                 try:
@@ -159,7 +165,8 @@ def stacked_prediction(asset: str = "BTC") -> dict:
     p_gru = None  # GRU retired 2026-09: AUC 0.50 across all runs, TCN skipped
     # (low-SNR 60m windows; LGBM+flow dominates). train_gru.py kept for record.
     # production = calibrated LGBM (stack evaluated, added no value)
-    return {"p_lgbm": round(p_lgbm, 4), "p_gru": p_gru, "p_stack": round(p_lgbm, 4)}
+    return {"p_lgbm": round(p_lgbm, 4), "p_gru": p_gru, "p_stack": round(p_lgbm, 4),
+            "cal_src": S.get("cal_src", "base")}
 
 
 def _gru_proba_via_subprocess(btc_tail: pd.DataFrame, b1: dict, meta: dict,

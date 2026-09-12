@@ -149,6 +149,9 @@ def pick_15m(p_stack: float, m: dict, threshold: float, conf: float) -> dict | N
 def run_cycle(cfg: dict | None = None) -> dict:
     """One 15-min up/down cycle across TRADE_ASSETS. Never raises."""
     cfg = cfg or get_config()
+    _h = _active_halt()
+    if _h:
+        return {"action": "halt", "reason": _h, "results": []}
     max_in = float(cfg.get("max_minutes_in", 5))
     results: list[dict] = []
     try:
@@ -202,10 +205,18 @@ def _eval_asset(asset: str, cfg: dict, conf: float, max_in: float) -> dict:
         log_cycle("skip", f"{asset}: direction model not trained (no p_stack)", **base)
         return {"asset": asset, "action": "skip", "reason": "no_stack_signal", **base}
 
-    event = K.current_15m_ticker(asset)
+    try:
+        event = K.current_15m_ticker(asset)
+    except K.MarketAbsent as e:
+        log_cycle("skip", f"{asset}: {e}", **base)
+        return {"asset": asset, "action": "skip", "reason": "no_market", **base}
     try:
         m = K.get_15m(event)
     except Exception as e:
+        if "404" in str(e):
+            # listed moments ago, gone now (settled between calls): not an error
+            log_cycle("skip", f"{event}: vanished mid-cycle (settled?)", **{**base, "event": event})
+            return {"asset": asset, "action": "skip", "reason": "no_market", **{**base, "event": event}}
         log_cycle("error", f"{event}: {e}", **{**base, "event": event})
         return {"asset": asset, "action": "error", "reason": str(e)[:100], **{**base, "event": event}}
     # stale-signal breaker: bars older than 30m invalidate the decision
@@ -394,8 +405,19 @@ class AutoTrader(threading.Thread):
 _trader: AutoTrader | None = None
 
 
+def _active_halt() -> str | None:
+    for h in T.halt_state():
+        if h["scope"] in ("crypto", "all"):
+            return h["reason"]
+    return None
+
+
 def start_trader(**cfg) -> dict:
     global _trader
+    reason = _active_halt()
+    if reason:
+        return {**status(), "started": False,
+                "error": f"refusing to start: active halt ({reason}). Clear it first."}
     set_config(enabled=1, **cfg)
     if _trader is None or not _trader.is_alive():
         _trader = AutoTrader()

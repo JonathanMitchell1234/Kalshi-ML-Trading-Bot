@@ -137,19 +137,41 @@ def _et_floor15(now_et: datetime) -> datetime:
     return now_et.replace(second=0, microsecond=0).replace(minute=(now_et.minute // 15) * 15)
 
 
+class MarketAbsent(Exception):
+    """The expected event ticker doesn't exist (Kalshi skips low-liquidity
+    slots overnight). Not a transport error — callers should skip quietly."""
+
+
+_live_cache: dict = {}
+
+
 def current_15m_ticker(asset: str = "BTC") -> str:
-    """Live 15-min event (closes next quarter-hour ET), verified vs the API."""
+    """Live 15-min event: nearest slot at/before now+15m with an ACTIVE market.
+
+    Kalshi skips some overnight slots entirely (404), so scan a 2h window
+    instead of trusting one guess. Cached 4 min to spare the API.
+    Raises MarketAbsent when nothing is tradeable right now.
+    """
+    import time as _t
     from datetime import timedelta as _td
+    key = (asset, int(_t.time() // 240))
+    if key in _live_cache:
+        return _live_cache[key]
     base_close = _et_floor15(_et_now())
-    for back_min in (15, 30, 0):
+    tried = []
+    for back_min in (15, 30, 0, 45, 60, 75, 90, 105, 120, -15):
         t = m15_ticker_for(base_close - _td(minutes=back_min - 15), asset)
+        tried.append(t)
         try:
             mk = get_event(t).get("markets", [])
-            if any(m.get("status") == "active" for m in mk):
-                return t
         except Exception:
-            continue
-    return m15_ticker_for(base_close, asset)
+            continue  # transport blip: keep scanning, don't conclude
+        if not mk:
+            continue  # 404/empty: slot was never listed
+        if any(m.get("status") == "active" for m in mk):
+            _live_cache[key] = t
+            return t
+    raise MarketAbsent(f"no active {asset} 15m event near {base_close} (tried {tried[-1]}..{tried[0]})")
 
 
 def parse_updown(m: dict, event_ticker: str = "") -> dict:

@@ -219,7 +219,9 @@ function renderOverview(o) {
   $("overview").innerHTML = `
     <div class="card"><div class="k">BTC spot</div><div class="v">${fmt$(o.spot, 0)}</div><div class="s">Binance.US</div></div>
     <div class="card"><div class="k">Model next 15m</div><div class="v ${dir}">${fmt$(o.pred_price, 0)}</div><div class="s">regression center</div></div>
-    <div class="card"><div class="k">Stack P(up)</div><div class="v">${o.p_stack == null ? "—" : pct(o.p_stack)}</div><div class="s">calibrated LGBM${o.p_gru != null ? " · GRU " + pct(o.p_gru) : ""}</div></div>`;
+    <div class="card"><div class="k">Stack P(up) <span id="calSrc" class="sub"></span></div><div class="v">${o.p_stack == null ? "—" : pct(o.p_stack)}</div><div class="s">calibrated LGBM${o.p_gru != null ? " · GRU " + pct(o.p_gru) : ""}</div></div>`;
+  const _cs = $("calSrc");
+  if (_cs) _cs.textContent = o.cal_src ? `(${o.cal_src} cal)` : "";
   const ud = o.updown || {};
   const names = Object.keys(ud).filter((k) => /^[A-Z]{2,4}$/.test(k));
   $("udLine").textContent = names.map((k) => {
@@ -297,7 +299,21 @@ async function loadRisk() {  let r;
   $("modeBadge").textContent = r.mode || "PAPER";
   const halts = r.halts || [];
   $("haltBanner").innerHTML = halts.map((h) =>
-    `<div class="haltbanner" role="alert"><b>HALTED</b> (${esc(h.scope)}): ${esc(h.reason)} · ${esc(h.ts || "")}</div>`).join("");
+    `<div class="haltbanner" role="alert"><b>HALTED</b> (${esc(h.scope)}): ${esc(h.reason)} · ${esc(h.ts || "")}
+     <button class="ghost" data-clearhalt="${esc(h.scope)}" style="margin-left:10px">Acknowledge &amp; clear</button></div>`).join("");
+  document.querySelectorAll("[data-clearhalt]").forEach((b) => b.onclick = async () => {
+    const scope = b.dataset.clearhalt;
+    const ok = await confirmDlg({ title: `Clear ${scope} halt?`,
+      body: "This only clears the record. Trading stays STOPPED until you deliberately restart a trader.",
+      okLabel: "Clear halt" });
+    if (!ok) return;
+    try {
+      await api("/api/halt-clear", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope }) });
+      toast("Halt cleared. Restart a trader to resume.", "ok");
+    } catch (e) { toast("Clear failed: " + e.message, "err"); }
+    loadRisk(); loadAuto();
+  });
   const lim = r.limits, d = r.day;
   const usePct = Math.min(100, Math.abs(d.total_cents) / lim.max_daily_loss_cents * 100);
   const danger = d.total_cents <= 0 && usePct >= 75;
@@ -409,7 +425,7 @@ async function boot() {
   $("resolveBtn").onclick = async () => { await api("/api/resolve", { method: "POST" }); toast("Open trades re-checked against Kalshi results.", "ok"); loadStats(); loadTrades(); };
   $("haltBtn").onclick = async () => {
     const ok = await confirmDlg({ title: "HALT ALL trading?",
-      body: "Stops crypto + weather paper traders immediately and records a manual halt. Resolve to resume: clear the halt by restarting a trader.",
+      body: "Stops crypto + weather paper traders immediately and records a manual halt. Resume by clearing the halt banner, then restarting a trader.",
       okLabel: "HALT ALL", danger: true });
     if (!ok) return;
     try { await api("/api/halt-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); toast("All trading halted.", "err"); }

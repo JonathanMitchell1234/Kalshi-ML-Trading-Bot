@@ -50,7 +50,7 @@ def overview() -> dict:
         "spot": pred["spot"], "pred_price": round(pred["pred_price"], 2),
         "p_up": round(pred["p_up"], 4), "asof": pred["asof"],
         "p_stack": pred.get("p_stack"), "p_lgbm": pred.get("p_lgbm"),
-        "p_gru": pred.get("p_gru"),
+        "p_gru": pred.get("p_gru"), "cal_src": pred.get("cal_src", "base"),
         "event": event, "event_title": meta.get("title"),
         "close_time": close, "minutes_to_close": round(mins, 1) if mins else None,
         "n_active": len(act),
@@ -516,9 +516,22 @@ def api_halt_all(payload: dict = {}):
     return {"halted": True, "reason": reason, "cancelled": cancelled}
 
 
+class HaltClear(BaseModel):
+    scope: str | None = None
+
+
+@app.post("/api/halt-clear")
+def api_halt_clear(req: HaltClear):
+    """Deliberate acknowledge: clears halt record(s). Traders stay stopped
+    until explicitly (re)started — clearing never auto-resumes trading."""
+    if req.scope and req.scope not in ("crypto", "wx", "all"):
+        raise HTTPException(400, "scope crypto|wx|all")
+    T.clear_halts(req.scope)
+    return {"cleared": req.scope or "all", "halts": T.halt_state()}
+
+
 class LiveArm(BaseModel):
     confirm: str = ""
-
 
 @app.get("/api/live/status")
 def api_live_status():

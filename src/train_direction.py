@@ -128,13 +128,107 @@ def main(asset: str = "BTC"):
     imp.to_csv(MODEL_DIR / f"{px}dir_importance.csv", index=False)
     print("Top 12:\n" + imp.head(12).to_string(index=False))
     from tracker import stamp
-    print(f"version dir_{asset}=" + stamp(f"dir_{asset}"))
+    ver = stamp(f"dir_{asset}")
+    print(f"version dir_{asset}=" + ver)
+    try:
+        from mlflow_log import log_run, feat_hash
+        _t = metrics["test"]
+        log_run("bitbot-crypto", f"dir_{asset}_{ver}",
+                params={**PARAMS, "seeds": N_SEEDS, "deadband": _eps, "gamma": _gamma,
+                        "n feats": len(feats)},
+                metrics={"test_acc": _t["acc"], "test_logloss": _t["logloss"],
+                         "test_brier": _t["brier"], "test_auc": _t["auc"],
+                         **{f"hit_c{c}": v["hit_rate"] for c, v in metrics["conf_test"].items() if v["hit_rate"]},
+                         "base_rate": metrics["base_rate_test"], "n_test": _t["n"]},
+                tags={"asset": asset, "version": ver, "feat_hash": feat_hash(feats),
+                      "top_feats": ",".join(imp.head(10)["feature"])},
+                artifact_texts={"metrics.json": json.dumps(metrics, indent=1)})
+    except Exception as e:
+        print(f"mlflow skipped ({e})")
     print("saved.")
     return df, feats, p
+
+
+def recalibrate(asset: str = "BTC", fit_days: int = 21, hold_days: int = 7):
+    """Walk-forward recalibration: fresh isotonic on trailing raw scores.
+
+    Fit iso on [now-fit-hold, now-hold), score Brier vs the production cal on
+    [now-hold, now). Ships dir_cal_live.pkl ONLY on improvement (self-gating).
+    Run daily — regime drift is the #1 calibration killer.
+    """
+    from sklearn.isotonic import IsotonicRegression
+    from sklearn.metrics import log_loss
+    leaders = tuple(a for a in ("BTC", "ETH", "SOL", "XRP") if a != asset)
+    px = "" if asset == "BTC" else f"{asset.lower()}_"
+    btc15 = load_or_fetch(asset, "15m", days=45)
+    btc1 = load_or_fetch(asset, "1m", days=45)
+    b15 = {a: load_or_fetch(a, "15m", days=45) for a in leaders}
+    b1 = {a: load_or_fetch(a, "1m", days=45) for a in leaders}
+    df, feats, _ = build_dataset(btc15, btc1, b15, b1, leaders, asset)
+    saved_feats = joblib.load(MODEL_DIR / f"{px}dir_feats.pkl")
+    feats = [f for f in saved_feats if f in df.columns]
+    X, y = df[feats].values, df["y_up"].values
+    t = pd.to_datetime(df["time"], utc=True)
+    now = t.max()
+    fit_m = (t >= now - pd.Timedelta(days=fit_days + hold_days)) & (t < now - pd.Timedelta(days=hold_days))
+    hold_m = t >= now - pd.Timedelta(days=hold_days)
+    print(f"{asset}: refit n={fit_m.sum()}, holdout n={hold_m.sum()}")
+    if fit_m.sum() < 300 or hold_m.sum() < 100:
+        print("insufficient recent rows, keeping production cal")
+        return None
+    boosters = joblib.load(MODEL_DIR / f"{px}dir_clf.pkl")
+    boosters = boosters if isinstance(boosters, list) else [boosters]
+    raw = sum(c.predict_proba(X)[:, 1] for c in boosters) / len(boosters)
+    iso = IsotonicRegression(out_of_bounds="clip", y_min=0.02, y_max=0.98)
+    iso.fit(raw[fit_m], y[fit_m])
+    p_new = iso.predict(raw)
+    cur = joblib.load(MODEL_DIR / f"{px}dir_cal.pkl")
+    _m = cur["model"]
+    p_cur = (_m.predict_proba(raw.reshape(-1, 1))[:, 1] if cur["kind"] == "platt"
+             else _m.predict(raw))
+    clip = lambda p: np.clip(p, 1e-6, 1 - 1e-6)
+    b_new = log_loss(y[hold_m], clip(p_new[hold_m]))
+    b_cur = log_loss(y[hold_m], clip(p_cur[hold_m]))
+    print(f"{asset}: trailing logloss new={b_new:.4f} vs prod={b_cur:.4f}")
+    # spread-preservation gate: a flatter map can win logloss while killing all
+    # trading (BTC scare Sep 9). Require the new map to keep real conviction.
+    import pandas as _pd
+    _h = pd.Series(p_new[hold_m])
+    _frac = float(((_h >= 0.60) | (_h <= 0.40)).mean())
+    print(f"{asset}: holdout conviction frac={_frac:.3f}")
+    if _frac < 0.03:
+        print("new map too flat to trade on, keeping production cal")
+        return False
+    if b_new < b_cur:
+        joblib.dump({"kind": "isotonic", "model": iso,
+                     "fitted_at": now.isoformat(), "holdout_logloss": b_new},
+                    MODEL_DIR / f"{px}dir_cal_live.pkl")
+        from tracker import stamp
+        ver = stamp(f"dir_{asset}_recal")
+        print(f"SHIPPED live cal dir_{asset}=" + ver)
+        try:
+            from mlflow_log import log_run
+            log_run("bitbot-crypto", f"recal_{asset}_{ver}",
+                    params={"fit_days": fit_days, "hold_days": hold_days},
+                    metrics={"holdout_logloss_new": b_new, "holdout_logloss_prod": b_cur,
+                             "conviction_frac": _frac},
+                    tags={"kind": "recalibration", "asset": asset, "version": ver})
+        except Exception as e:
+            print(f"mlflow skipped ({e})")
+        return True
+    print("no improvement, keeping production cal")
+    return False
 
 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--asset", default="BTC")
-    main(ap.parse_args().asset)
+    ap.add_argument("--recalibrate", action="store_true",
+                    help="walk-forward recalibration only (no retrain)")
+    a = ap.parse_args()
+    if a.recalibrate:
+        recalibrate(a.asset)
+    else:
+        main(a.asset)
+

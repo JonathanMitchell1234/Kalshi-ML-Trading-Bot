@@ -242,6 +242,10 @@ def open_targets() -> list[tuple[str, object]]:
 
 def run_cycle(cfg: dict | None = None) -> dict:
     cfg = cfg or get_config()
+    _h = _active_halt()
+    if _h:
+        log_cycle("halt", f"halted, not trading: {_h}")
+        return {"action": "halt", "reason": _h, "results": []}
     T.resolve_open_trades()
     import risk as R
     dp = T.day_pnl()
@@ -324,8 +328,19 @@ class WxTrader(threading.Thread):
         self._stop_event.set()
 
 
+def _active_halt() -> str | None:
+    for h in T.halt_state():
+        if h["scope"] in ("wx", "all"):
+            return h["reason"]
+    return None
+
+
 def start_trader(**cfg) -> dict:
     global _trader
+    reason = _active_halt()
+    if reason:
+        return {**status(), "started": False,
+                "error": f"refusing to start: active halt ({reason}). Clear it first."}
     set_config(enabled=1, **cfg)
     if _trader is None or not _trader.is_alive():
         _trader = WxTrader()

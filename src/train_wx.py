@@ -178,7 +178,22 @@ def main(city: str = "NYC"):
     print(imp.head(10).to_string(index=False))
     if not _anom:
         from tracker import stamp
-        print(f"version wx_{city}=" + stamp(f"wx_{city}"))
+        ver = stamp(f"wx_{city}")
+        print(f"version wx_{city}=" + ver)
+        try:
+            from mlflow_log import log_run, feat_hash
+            log_run("bitbot-weather", f"wx_{city}_{ver}",
+                    params={"booster": out.get("booster"), "n_feats": len(feats),
+                            "anomaly": False},
+                    metrics={"rmse": out.get("rmse"), "mae": out.get("mae"),
+                             "brier_bayes": out.get("brier_bayes"),
+                             "brier_clim": out.get("brier_clim"),
+                             "n_test": out.get("n_test")},
+                    tags={"city": city, "version": ver, "feat_hash": feat_hash(feats),
+                          "top_feats": ",".join(imp.head(10)["feature"])},
+                    artifact_texts={"metrics.json": json.dumps(out, indent=1)})
+        except Exception as e:
+            print(f"mlflow skipped ({e})")
     return out
 
 

@@ -61,8 +61,18 @@ def run_backtest_15m(n_events: int = 200, conf: float = 0.10, progress=None, ass
     rid = save_backtest_run(n_events=len(picks), lead_min=0, picks=picks,
                             note=f"{asset} 15m up/down policy conf={conf}, scanned={scanned}")
     tr = [p for p in picks if p["hit"] is not None]
-    return {"run_id": rid, "n": len(picks), "traded": len(tr),
-            "hit_rate": round(sum(p["hit"] for p in tr) / len(tr), 4) if tr else None}
+    res = {"run_id": rid, "n": len(picks), "traded": len(tr),
+           "hit_rate": round(sum(p["hit"] for p in tr) / len(tr), 4) if tr else None}
+    try:
+        from mlflow_log import log_run
+        if res["hit_rate"] is not None:
+            log_run("bitbot-crypto", f"backtest15_{asset}_{rid}",
+                    params={"n_events": len(picks), "conf": conf},
+                    metrics={"hit_rate": res["hit_rate"], "traded": len(tr)},
+                    tags={"kind": "backtest", "asset": asset, "run_id": rid})
+    except Exception:
+        pass
+    return res
 
 
 if __name__ == "__main__":

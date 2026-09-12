@@ -188,10 +188,22 @@ def run_wx_backtest(city: str = "NYC", n_days: int = 120, progress=None, pooled:
     hits = sum(p["hit"] for p in picks)
     rid = save_backtest_run(n_events=len(picks), lead_min=0, picks=picks,
                             note=f"WX {city} density backtest, scanned={scanned}")
-    return {"run_id": rid, "n": len(picks),
-            "hit_rate": round(hits / len(picks), 4) if picks else None,
-            "mean_winner_mass": round(float(np.mean([1 - p["err15"] for p in picks])), 4) if picks else None,
-            "crps_mean": _crps_mean, "pit_ks_pvalue": _ks, "n_pit": len(_pits)}
+    res = {"run_id": rid, "n": len(picks),
+           "hit_rate": round(hits / len(picks), 4) if picks else None,
+           "mean_winner_mass": round(float(np.mean([1 - p["err15"] for p in picks])), 4) if picks else None,
+           "crps_mean": _crps_mean, "pit_ks_pvalue": _ks, "n_pit": len(_pits)}
+    try:
+        from mlflow_log import log_run
+        if res["hit_rate"] is not None:
+            log_run("bitbot-weather", f"wxbacktest_{city}_{rid}",
+                    params={"n_events": len(picks), "pooled": pooled},
+                    metrics={"hit_rate": res["hit_rate"], "mean_winner_mass": res["mean_winner_mass"],
+                             **({"crps_mean": _crps_mean} if _crps_mean else {}),
+                             **({"pit_ks": _ks} if _ks else {})},
+                    tags={"kind": "backtest", "city": city, "run_id": rid})
+    except Exception:
+        pass
+    return res
 
 
 if __name__ == "__main__":

@@ -55,6 +55,11 @@ python src/train_stack.py       # logistic stack + comparison
 - Held-out test: **BTC AUC 0.61, ETH AUC 0.55**; side-aware policy backtest on
   200 live Kalshi windows each: **BTC 86% (22 trades), ETH 60% (43)** —
   BTC's rate is a small-sample high (CI 65–97%); paper will regress it.
+- **Walk-forward recalibration** (`train_direction --recalibrate`, daily cron):
+  fresh isotonic on trailing-21d raw scores, ships `dir_cal_live.pkl` only on
+  holdout-Brier improvement. Dashboard shows live vs base cal. Fixes the
+  short-side overconfidence the paper log exposed (ETH 52% realized vs 65%
+  implied on NO bets).
 - SOL/XRP expansion tested and **gated out** (27%/38% backtests; thin markets,
   no taker fields on venue). BTC+ETH only in production.
 - Held-out test: **BTC AUC 0.61, ETH AUC 0.60**; side-aware policy backtest on
@@ -80,6 +85,11 @@ python src/train_stack.py       # logistic stack + comparison
   fixed (schedule-exact now). `src/selftest.py` runs at boot + `/api/health`.
 - `src/evaluate.py` + `/api/eval` + dashboard section — per-model-version
   P&L, Wilson 95% CIs, equity/Sharpe/drawdown, live reliability.
+- **MLflow tracking** (`src/mlflow_log.py`, store `sqlite:////Users/Jonathan/mlflow.db`,
+  experiments `bitbot-crypto` / `bitbot-weather`): every train, recalibration,
+  and backtest logs params/metrics/tags (feat-hash + top feats per run, so
+  feature-set changes correlate with performance). Best-effort — training
+  never fails on tracking errors.
 - `src/risk.py` + `/api/risk` + `POST /api/halt-all` — daily-loss halt
   (−$500, auto-expires at UTC midnight), 10-position / $100-trade caps,
   calibration-drift halt (trailing-20 under 45% while implying ≥55%),
@@ -132,6 +142,11 @@ settled on The Weather Company. Pipeline:
   edge ≥ 0.03 (0.05 for T+1 — forecast skill decays), 1/event, intraday
   conditioning on NWS observed max-so-far, plus an NWP-disagreement rail
   (skip when |model − NDFD| > 6°F, GFS fallback; NDFD logged every cycle).
+- **STATUS 2026-09-09: WX PAPER HALTED (0/9 settled).** Post-mortem: every buy
+  was a cold tail (below-X brackets) at +22–52% claimed edge; model runs 2–4°F
+  colder than NWP-informed prices in heat regimes — a bias no threshold fixes.
+  Re-entry: (1) GFS/NDFD blend on ≥30d logs (~Oct), backtest-gated; (2) fresh
+  60-event bracket backtest ≥30% argmax. Logging + harness keep running.
 - v1 limits (honest): no NWP input (GFS logged for v1.1 blending); ERA5-vs-TWC
   basis bias-corrected, residual reported. New modules only; crypto tab untouched.
 
